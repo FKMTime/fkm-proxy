@@ -27,7 +27,9 @@ async fn main() -> Result<()> {
             }
         }
 
-        println!("start: {start} stop: {stop}");
+        // Skip "Host: " part of host header (to get host only)
+        start += 6;
+
         let str = String::from_utf8_lossy(&in_buffer[start..stop]);
         println!("str: |{str}|");
 

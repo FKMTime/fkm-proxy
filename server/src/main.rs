@@ -48,6 +48,7 @@ async fn connector_listener(addr: String, open_tunnel_chanel: OpenTunnChan) -> R
 
     loop {
         let (stream, _) = listener.accept().await?;
+        stream.set_nodelay(true)?;
         tokio::task::spawn(connector_handler(stream, open_tunnel_chanel.clone()));
     }
 }
@@ -71,7 +72,6 @@ async fn connector_handler(mut stream: TcpStream, open_tunnel_channel: OpenTunnC
 
         loop {
             let _ = rx.recv().await?;
-            println!("Send new tunnel req");
             stream.write_u8(0x40).await?; // 0x40 - open tunnel
         }
     } else if connection_buff[0] == 1 {
@@ -80,9 +80,7 @@ async fn connector_handler(mut stream: TcpStream, open_tunnel_channel: OpenTunnC
         let open_tunnel_channel = open_tunnel_channel.read().await;
         let tx = &open_tunnel_channel.get(tun_dest).unwrap().1;
 
-        stream.set_nodelay(true)?;
         tx.send(stream).await?;
-        println!("new tunnel conn");
     }
 
     Ok(())
@@ -93,6 +91,7 @@ async fn remote_listener(addr: String, open_tunnel_channel: OpenTunnChan) -> Res
     let listener = TcpListener::bind(addr).await?;
     loop {
         let (stream, _) = listener.accept().await?;
+        stream.set_nodelay(true)?;
         tokio::task::spawn(handle_client(stream, open_tunnel_channel.clone()));
     }
 }
@@ -119,7 +118,7 @@ async fn handle_client(mut stream: TcpStream, open_tunnel_channel: OpenTunnChan)
     start += 6;
 
     let host = String::from_utf8_lossy(&in_buffer[start..stop]);
-    println!("str: |{host}|");
+    //println!("str: |{host}|");
     let host = "dsa"; // for test
 
     let chan = open_tunnel_channel.read().await;
@@ -127,9 +126,7 @@ async fn handle_client(mut stream: TcpStream, open_tunnel_channel: OpenTunnChan)
     tx.send(()).await?;
 
     let mut tunnel = s_rx.recv().await?;
-    tunnel.write(&in_buffer).await?;
-    stream.set_nodelay(true)?;
-    println!("Got new tunnel");
+    tunnel.write_all(&in_buffer[..n]).await?;
     tokio::io::copy_bidirectional(&mut stream, &mut tunnel).await?;
 
     Ok(())

@@ -4,7 +4,7 @@ use tokio::{
     net::TcpStream,
 };
 
-const SERVER_ADDR: &str = "127.0.0.1:6969";
+const SERVER_ADDR: &str = "34.118.112.139:6969";
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -24,7 +24,7 @@ async fn main() -> Result<()> {
 }
 
 async fn spawn_tunnel() -> Result<()> {
-    let mut local_stream = TcpStream::connect("127.0.0.1:5000").await?;
+    let mut local_stream = TcpStream::connect("127.0.0.1:80").await?;
     let mut tunnel_stream = TcpStream::connect(SERVER_ADDR).await?;
     local_stream.set_nodelay(true)?;
 
@@ -33,7 +33,6 @@ async fn spawn_tunnel() -> Result<()> {
     tunnel_stream.write_all(&conn_buff).await?;
     tunnel_stream.set_nodelay(true)?;
 
-    println!("Tunnel created");
     tokio::io::copy_bidirectional(&mut local_stream, &mut tunnel_stream).await?;
     Ok(())
 }

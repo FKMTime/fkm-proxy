@@ -4,13 +4,17 @@ use tokio::{
     net::TcpStream,
 };
 
-const SERVER_ADDR: &str = "34.118.112.139:6969";
+const SERVER_ADDR: &str = "v1.filipton.space:6969";
+const TOKEN: u128 = 0x6942069420;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let mut connector = TcpStream::connect(SERVER_ADDR).await?;
     let mut conn_buff = [0u8; 64];
-    conn_buff[0] = 0x00; // tell the server we are the connector
+    conn_buff[0] = 0x00;
+
+    let token_bytes = TOKEN.to_be_bytes();
+    conn_buff[1..17].copy_from_slice(&token_bytes);
 
     connector.write_all(&conn_buff).await?;
     loop {
@@ -29,7 +33,11 @@ async fn spawn_tunnel() -> Result<()> {
     local_stream.set_nodelay(true)?;
 
     let mut conn_buff = [0u8; 64];
-    conn_buff[0] = 0x01; // tell the server we are the tunnel
+    conn_buff[0] = 0x01;
+
+    let token_bytes = TOKEN.to_be_bytes();
+    conn_buff[1..17].copy_from_slice(&token_bytes);
+
     tunnel_stream.write_all(&conn_buff).await?;
     tunnel_stream.set_nodelay(true)?;
 

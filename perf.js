@@ -11,7 +11,7 @@ export const options = {
 
 // Simulated user behavior
 export default function() {
-    let res = http.get("http://dsa5.fkm.filipton.space");
+    let res = http.get("https://dsa5.fkm.filipton.space/api");
     // Validate response status
     check(res, { "status was 200": (r) => r.status == 200 });
 }

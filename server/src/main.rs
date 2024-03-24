@@ -1,50 +1,27 @@
-use anyhow::Result;
-use kanal::{AsyncReceiver, AsyncSender};
-use std::{collections::HashMap, sync::Arc};
+use crate::structs::SharedProxyState;
+use anyhow::{anyhow, Result};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    sync::RwLock,
 };
 
-pub type OpenTunnChan = Arc<
-    RwLock<
-        HashMap<
-            u128,
-            (
-                AsyncSender<()>,
-                AsyncSender<TcpStream>,
-                AsyncReceiver<TcpStream>,
-            ),
-        >,
-    >,
->;
-
-pub type ClientMap = Arc<RwLock<HashMap<String, u128>>>;
+mod structs;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let addr = std::env::args().nth(1).unwrap_or("1337".to_string());
     let connector_addr = "0.0.0.0:6969".to_string();
 
-    let open_tunnel_chan: OpenTunnChan = Arc::new(RwLock::new(HashMap::new()));
-    let client_map: ClientMap = Arc::new(RwLock::new(HashMap::new()));
+    let shared_proxy_state = SharedProxyState::new();
+    shared_proxy_state
+        .insert_client("bvcxbvxc.fkm.com:1337", 0x6942069420)
+        .await;
 
-    {
-        let mut client_map = client_map.write().await;
-        client_map.insert("test.fkm.filipton.space".to_string(), 0x6942069420);
-    }
-
-    tokio::task::spawn(remote_listener(
-        addr,
-        open_tunnel_chan.clone(),
-        client_map.clone(),
-    ));
+    tokio::task::spawn(remote_listener(addr, shared_proxy_state.clone()));
 
     tokio::task::spawn(connector_listener(
         connector_addr,
-        open_tunnel_chan.clone(),
-        client_map.clone(),
+        shared_proxy_state.clone(),
     ));
 
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
@@ -59,36 +36,32 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn connector_listener(
-    addr: String,
-    open_tunnel_chanel: OpenTunnChan,
-    client_map: ClientMap,
-) -> Result<()> {
+async fn connector_listener(addr: String, state: SharedProxyState) -> Result<()> {
     println!("Connector listening on: {addr}");
     let listener = TcpListener::bind(addr).await?;
 
     loop {
         let (stream, _) = listener.accept().await?;
         stream.set_nodelay(true)?;
-        tokio::task::spawn(connector_handler(
-            stream,
-            open_tunnel_chanel.clone(),
-            client_map.clone(),
-        ));
+        tokio::task::spawn(connector_handler(stream, state.clone()));
     }
 }
 
-async fn connector_handler(
-    mut stream: TcpStream,
-    open_tunnel_channel: OpenTunnChan,
-    client_map: ClientMap,
-) -> Result<()> {
+async fn connector_handler(mut stream: TcpStream, state: SharedProxyState) -> Result<()> {
     let mut connection_buff = [0u8; 64];
     stream.read_exact(&mut connection_buff).await?;
 
-    let client_map = client_map.read().await;
-    let token: u128 = u128::from_be_bytes(connection_buff[1..17].try_into().unwrap());
-    if !map_contains_value(&client_map, token) {
+    let url_hash: u64 = u64::from_be_bytes(connection_buff[1..9].try_into()?);
+
+    // token should be encrypted using aes or sth!
+    let token: u128 = u128::from_be_bytes(connection_buff[10..26].try_into()?);
+
+    let url_client_token = state
+        .get_token_by_url_hash(url_hash)
+        .await
+        .ok_or_else(|| anyhow!("Cant find token!"))?;
+
+    if token != url_client_token {
         return Ok(());
     }
 
@@ -96,13 +69,9 @@ async fn connector_handler(
     if connection_buff[0] == 0 {
         let (tx, rx) = kanal::unbounded_async::<()>();
         let (stream_tx, stream_rx) = kanal::unbounded_async();
-
-        {
-            open_tunnel_channel
-                .write()
-                .await
-                .insert(token, (tx, stream_tx, stream_rx));
-        }
+        state
+            .insert_tunnel_connector(token, (tx, stream_tx, stream_rx))
+            .await;
 
         loop {
             let _ = rx.recv().await?;
@@ -110,8 +79,10 @@ async fn connector_handler(
         }
     } else if connection_buff[0] == 1 {
         // im the tunnel!
-        let open_tunnel_channel = open_tunnel_channel.read().await;
-        let tx = &open_tunnel_channel.get(&token).unwrap().1;
+        let tx = state
+            .get_tunnel_tx(token)
+            .await
+            .ok_or_else(|| anyhow!("Cant find tunnel tx!"))?;
 
         tx.send(stream).await?;
     }
@@ -119,29 +90,17 @@ async fn connector_handler(
     Ok(())
 }
 
-async fn remote_listener(
-    addr: String,
-    open_tunnel_channel: OpenTunnChan,
-    client_map: ClientMap,
-) -> Result<()> {
+async fn remote_listener(addr: String, state: SharedProxyState) -> Result<()> {
     println!("Remote listening on: {addr}");
     let listener = TcpListener::bind(addr).await?;
     loop {
         let (stream, _) = listener.accept().await?;
         stream.set_nodelay(true)?;
-        tokio::task::spawn(handle_client(
-            stream,
-            open_tunnel_channel.clone(),
-            client_map.clone(),
-        ));
+        tokio::task::spawn(handle_client(stream, state.clone()));
     }
 }
 
-async fn handle_client(
-    mut stream: TcpStream,
-    open_tunnel_channel: OpenTunnChan,
-    client_map: ClientMap,
-) -> Result<()> {
+async fn handle_client(mut stream: TcpStream, state: SharedProxyState) -> Result<()> {
     let mut in_buffer = [0; 8192];
 
     let n = stream.read(&mut in_buffer).await?;
@@ -163,27 +122,23 @@ async fn handle_client(
     start += 6;
 
     let host = String::from_utf8_lossy(&in_buffer[start..stop]);
-    println!("Host: {host}");
-    let client_map = client_map.read().await;
-    let token = client_map.get(host.as_ref());
-    if token.is_none() {
-        return Ok(());
-    }
+    //println!("Host: {host}");
 
-    let chan = open_tunnel_channel.read().await;
-    let (tx, _s_tx, s_rx) = chan.get(&token.unwrap()).unwrap();
-    tx.send(()).await?;
+    let token = state
+        .get_client_token(&host)
+        .await
+        .ok_or_else(|| anyhow!("Token not found!"))?;
 
-    let mut tunnel = s_rx.recv().await?;
+    let tunn = state
+        .get_tunnel_entry(token)
+        .await
+        .ok_or_else(|| anyhow!("Tunnel entry not found!"))?;
+
+    tunn.0.send(()).await?;
+    let mut tunnel = tunn.2.recv().await?;
+
     tunnel.write_all(&in_buffer[..n]).await?;
     tokio::io::copy_bidirectional(&mut stream, &mut tunnel).await?;
 
     Ok(())
-}
-
-fn map_contains_value<K, V>(map: &HashMap<K, V>, value: V) -> bool
-where
-    V: PartialEq,
-{
-    map.values().any(|v| *v == value)
 }

@@ -87,6 +87,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d231dfb89cfffdbc30e7fc41579ed6066ad03abda9e567ccafae602b97ec5024"
 
 [[package]]
+name = "highway"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b4ba82c000837f4e74df01a5520f0dc48735d4aed955a99eae4428bab7cf3acd"
+
+[[package]]
 name = "kanal"
 version = "0.1.0-pre8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -230,6 +236,7 @@ name = "server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "highway",
  "kanal",
  "tokio",
 ]

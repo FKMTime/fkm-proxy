@@ -232,7 +232,7 @@ fn load_keys(path: &Path) -> std::io::Result<PrivateKeyDer<'static>> {
     Ok(key)
 }
 
-async fn serve_own_cert(mut stream: TcpStream) -> Result<()> {
+async fn serve_own_cert(stream: TcpStream) -> Result<()> {
     let certs = load_certs(Path::new("cert.pem"))?;
     let privkey = load_keys(Path::new("key.pem"))?;
 

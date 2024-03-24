@@ -85,13 +85,13 @@ async fn connector_handler(mut stream: TcpStream, state: SharedProxyState) -> Re
         loop {
             tokio::select! {
                 res = rx.recv() => {
-                    println!("Opening tunnel: {:?}", res);
-                    if res? == u8::MAX {
+                    let res = res?;
+                    if res == u8::MAX {
                         // if max, close connector
                         return Ok(());
                     }
 
-                    stream.write_u8(0x40).await?; // 0x40 - open tunnel
+                    stream.write_u8(res).await?;
                 }
                 res = stream.read_u8() => {
                     if res.is_err() {
@@ -165,7 +165,6 @@ async fn handle_client(mut stream: TcpStream, state: SharedProxyState, ssl: bool
     };
 
     let ssl = u8::from(ssl);
-    println!("Tunneling to: {host} (SSL: {ssl})");
     let tunn = match get_tunn(&state, &host).await {
         Ok(tunn) => tunn,
         Err(TunnelError::TunnelDoesNotExist) => {

@@ -20,7 +20,7 @@ RUN apk add --no-cache certbot certbot-nginx
 RUN mkdir -p /etc/letsencrypt
 
 EXPOSE 80
-COPY ./nginx/default.conf /etc/nginx/conf.template
+#COPY ./nginx/default.conf /etc/nginx/conf.template
 COPY ./nginx/entrypoint.sh /entrypoint.sh
 RUN rm /etc/nginx/conf.d/default.conf
 

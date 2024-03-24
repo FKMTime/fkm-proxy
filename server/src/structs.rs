@@ -4,7 +4,7 @@ use std::{collections::HashMap, sync::Arc};
 use tokio::{net::TcpStream, sync::RwLock};
 
 pub type TunnelEntry = (
-    AsyncSender<()>,
+    AsyncSender<bool>,
     AsyncSender<TcpStream>,
     AsyncReceiver<TcpStream>,
 );
@@ -35,7 +35,11 @@ impl SharedProxyState {
 
     pub async fn insert_tunnel_connector(&self, token: u128, tunnel: TunnelEntry) {
         let mut state = self.0.write().await;
-        state.tunnels.insert(token, tunnel);
+        let old = state.tunnels.insert(token, tunnel);
+
+        if let Some(old) = old {
+            _ = old.0.send(true).await; // close old connector
+        }
     }
 
     pub async fn get_client_token(&self, url: &str) -> Option<u128> {

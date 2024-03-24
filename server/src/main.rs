@@ -67,14 +67,19 @@ async fn connector_handler(mut stream: TcpStream, state: SharedProxyState) -> Re
 
     // im the connector!
     if connection_buff[0] == 0 {
-        let (tx, rx) = kanal::unbounded_async::<()>();
+        let (tx, rx) = kanal::unbounded_async::<bool>();
         let (stream_tx, stream_rx) = kanal::unbounded_async();
         state
             .insert_tunnel_connector(token, (tx, stream_tx, stream_rx))
             .await;
 
         loop {
-            let _ = rx.recv().await?;
+            let res = rx.recv().await?;
+            if res { // if true, close connector
+                println!("Closing connector!");
+                return Ok(());
+            }
+
             stream.write_u8(0x40).await?; // 0x40 - open tunnel
         }
     } else if connection_buff[0] == 1 {
@@ -101,9 +106,9 @@ async fn remote_listener(addr: String, state: SharedProxyState) -> Result<()> {
 }
 
 async fn handle_client(mut stream: TcpStream, state: SharedProxyState) -> Result<()> {
-    let mut in_buffer = [0; 8192];
+    let mut in_buffer = [0; 1024];
 
-    let n = stream.read(&mut in_buffer).await?;
+    let n = stream.peek(&mut in_buffer).await?;
     let mut start = 0;
     let mut stop = 0;
     for i in 0..n {
@@ -122,7 +127,7 @@ async fn handle_client(mut stream: TcpStream, state: SharedProxyState) -> Result
     start += 6;
 
     let host = String::from_utf8_lossy(&in_buffer[start..stop]);
-    //println!("Host: {host}");
+    println!("Host: {host}");
 
     let token = state
         .get_client_token(&host)
@@ -134,10 +139,9 @@ async fn handle_client(mut stream: TcpStream, state: SharedProxyState) -> Result
         .await
         .ok_or_else(|| anyhow!("Tunnel entry not found!"))?;
 
-    tunn.0.send(()).await?;
+    tunn.0.send(false).await?;
     let mut tunnel = tunn.2.recv().await?;
 
-    tunnel.write_all(&in_buffer[..n]).await?;
     tokio::io::copy_bidirectional(&mut stream, &mut tunnel).await?;
 
     Ok(())

@@ -1,11 +1,13 @@
 use crate::structs::SharedProxyState;
 use anyhow::{anyhow, Result};
+use structs::{TunnelEntry, TunnelError};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
 
 mod structs;
+mod utils;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -67,6 +69,8 @@ async fn connector_handler(mut stream: TcpStream, state: SharedProxyState) -> Re
 
     // im the connector!
     if connection_buff[0] == 0 {
+        println!("Connector connected to url with hash: {url_hash}");
+
         let (tx, rx) = kanal::unbounded_async::<bool>();
         let (stream_tx, stream_rx) = kanal::unbounded_async();
         state
@@ -74,13 +78,23 @@ async fn connector_handler(mut stream: TcpStream, state: SharedProxyState) -> Re
             .await;
 
         loop {
-            let res = rx.recv().await?;
-            if res { // if true, close connector
-                println!("Closing connector!");
-                return Ok(());
-            }
+            tokio::select! {
+                res = rx.recv() => {
+                    if res? {
+                        // if true, close connector
+                        return Ok(());
+                    }
 
-            stream.write_u8(0x40).await?; // 0x40 - open tunnel
+                    stream.write_u8(0x40).await?; // 0x40 - open tunnel
+                }
+                res = stream.read_u8() => {
+                    if res.is_err() {
+                        state.remove_tunnel(token).await;
+                        // tunnel is closed
+                        return Ok(());
+                    }
+                }
+            }
         }
     } else if connection_buff[0] == 1 {
         // im the tunnel!
@@ -127,22 +141,50 @@ async fn handle_client(mut stream: TcpStream, state: SharedProxyState) -> Result
     start += 6;
 
     let host = String::from_utf8_lossy(&in_buffer[start..stop]);
-    println!("Host: {host}");
-
-    let token = state
-        .get_client_token(&host)
-        .await
-        .ok_or_else(|| anyhow!("Token not found!"))?;
-
-    let tunn = state
-        .get_tunnel_entry(token)
-        .await
-        .ok_or_else(|| anyhow!("Tunnel entry not found!"))?;
+    let tunn = match get_tunn(&state, &host).await {
+        Ok(tunn) => tunn,
+        Err(TunnelError::TunnelDoesNotExist) => {
+            _ = crate::utils::write_raw_http_resp(
+                &mut stream,
+                404,
+                "NOT FOUND",
+                "That tunnel does not exists!",
+            )
+            .await;
+            anyhow::bail!("");
+        }
+        Err(TunnelError::NoConnectorForTunnel) => {
+            _ = crate::utils::write_raw_http_resp(
+                &mut stream,
+                404,
+                "NOT FOUND",
+                "Connector for this tunnel isn't connected!",
+            )
+            .await;
+            anyhow::bail!("");
+        }
+        _ => {
+            anyhow::bail!("Error getting tunnel!");
+        }
+    };
 
     tunn.0.send(false).await?;
     let mut tunnel = tunn.2.recv().await?;
 
     tokio::io::copy_bidirectional(&mut stream, &mut tunnel).await?;
-
     Ok(())
+}
+
+async fn get_tunn(state: &SharedProxyState, host: &str) -> Result<TunnelEntry, TunnelError> {
+    let token = state
+        .get_client_token(&host)
+        .await
+        .ok_or_else(|| TunnelError::TunnelDoesNotExist)?;
+
+    let tunn = state
+        .get_tunnel_entry(token)
+        .await
+        .ok_or_else(|| TunnelError::NoConnectorForTunnel)?;
+
+    Ok(tunn)
 }

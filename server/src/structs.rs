@@ -1,6 +1,7 @@
 use highway::{HighwayHash, HighwayHasher};
 use kanal::{AsyncReceiver, AsyncSender};
 use std::{collections::HashMap, sync::Arc};
+use thiserror::Error;
 use tokio::{net::TcpStream, sync::RwLock};
 
 pub type TunnelEntry = (
@@ -62,4 +63,21 @@ impl SharedProxyState {
         let state = self.0.read().await;
         state.tunnels.get(&token).map(|x| x.1.clone())
     }
+
+    pub async fn remove_tunnel(&self, token: u128) {
+        let mut state = self.0.write().await;
+        state.tunnels.remove(&token);
+    }
+}
+
+#[derive(Error, Debug)]
+pub enum TunnelError {
+    #[error("Tunnel does not exist!")]
+    TunnelDoesNotExist,
+
+    #[error("No connector for this tunnel!")]
+    NoConnectorForTunnel,
+
+    #[error(transparent)]
+    Anyhow(#[from] anyhow::Error),
 }

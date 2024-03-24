@@ -1,9 +1,17 @@
+use std::{fs::File, io::BufReader, path::Path, sync::Arc};
+
 use crate::structs::{SharedProxyState, TunnelEntry, TunnelError};
 use anyhow::{anyhow, Result};
-use rustls::server::Acceptor;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
+};
+use tokio_rustls::{
+    rustls::{
+        pki_types::{CertificateDer, PrivateKeyDer},
+        server::Acceptor,
+    },
+    TlsAcceptor,
 };
 
 pub async fn spawn_tunnel_connector(
@@ -122,6 +130,20 @@ async fn handle_client(mut stream: TcpStream, state: SharedProxyState, ssl: bool
 
     let n = stream.peek(&mut in_buffer).await?;
 
+    let certs = load_certs(Path::new("cert.pem"))?;
+    let privkey = load_keys(Path::new("key.pem"))?;
+
+    let config = tokio_rustls::rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, privkey)?;
+
+    let acceptor = TlsAcceptor::from(Arc::new(config));
+    let mut stream = acceptor.accept(stream).await?;
+    let r = crate::utils::get_raw_http_resp(404, "NOT FOUND", "That tunnel does not exists!");
+
+    stream.write_all(r.as_bytes()).await?;
+
+    return Ok(());
     let host = if ssl {
         let mut n_buf = &in_buffer[..n];
         let mut acceptor = Acceptor::default();
@@ -156,6 +178,7 @@ async fn handle_client(mut stream: TcpStream, state: SharedProxyState, ssl: bool
         String::from_utf8_lossy(&in_buffer[start..stop]).to_string()
     };
 
+    /*
     let ssl = u8::from(ssl);
     println!("Tunneling to: {host} (SSL: {ssl})");
     let tunn = match get_tunn(&state, &host).await {
@@ -189,6 +212,7 @@ async fn handle_client(mut stream: TcpStream, state: SharedProxyState, ssl: bool
     let mut tunnel = tunn.2.recv().await?;
 
     tokio::io::copy_bidirectional(&mut stream, &mut tunnel).await?;
+    */
     Ok(())
 }
 
@@ -204,4 +228,13 @@ async fn get_tunn(state: &SharedProxyState, host: &str) -> Result<TunnelEntry, T
         .ok_or_else(|| TunnelError::NoConnectorForTunnel)?;
 
     Ok(tunn)
+}
+
+fn load_certs(path: &Path) -> std::io::Result<Vec<CertificateDer<'static>>> {
+    rustls_pemfile::certs(&mut BufReader::new(File::open(path)?)).collect()
+}
+
+fn load_keys(path: &Path) -> std::io::Result<PrivateKeyDer<'static>> {
+    let key = rustls_pemfile::private_key(&mut BufReader::new(File::open(path)?))?.unwrap();
+    Ok(key)
 }

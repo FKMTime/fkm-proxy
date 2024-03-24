@@ -5,7 +5,7 @@ use thiserror::Error;
 use tokio::{net::TcpStream, sync::RwLock};
 
 pub type TunnelEntry = (
-    AsyncSender<bool>,
+    AsyncSender<u8>,
     AsyncSender<TcpStream>,
     AsyncReceiver<TcpStream>,
 );
@@ -39,7 +39,7 @@ impl SharedProxyState {
         let old = state.tunnels.insert(token, tunnel);
 
         if let Some(old) = old {
-            _ = old.0.send(true).await; // close old connector
+            _ = old.0.send(u8::MAX).await; // close old connector
         }
     }
 

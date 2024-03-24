@@ -20,7 +20,7 @@ pub async fn spawn_tunnel_connector(
 ) -> Result<()> {
     let shared_proxy_state = SharedProxyState::new();
     shared_proxy_state
-        .insert_client("localhost", 0x6942069420)
+        .insert_client("test.fkm.filipton.space", 0x6942069420)
         .await;
 
     shared_proxy_state
@@ -130,20 +130,6 @@ async fn handle_client(mut stream: TcpStream, state: SharedProxyState, ssl: bool
 
     let n = stream.peek(&mut in_buffer).await?;
 
-    let certs = load_certs(Path::new("cert.pem"))?;
-    let privkey = load_keys(Path::new("key.pem"))?;
-
-    let config = tokio_rustls::rustls::ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(certs, privkey)?;
-
-    let acceptor = TlsAcceptor::from(Arc::new(config));
-    let mut stream = acceptor.accept(stream).await?;
-    let r = crate::utils::get_raw_http_resp(404, "NOT FOUND", "That tunnel does not exists!");
-
-    stream.write_all(r.as_bytes()).await?;
-
-    return Ok(());
     let host = if ssl {
         let mut n_buf = &in_buffer[..n];
         let mut acceptor = Acceptor::default();
@@ -178,12 +164,16 @@ async fn handle_client(mut stream: TcpStream, state: SharedProxyState, ssl: bool
         String::from_utf8_lossy(&in_buffer[start..stop]).to_string()
     };
 
-    /*
     let ssl = u8::from(ssl);
     println!("Tunneling to: {host} (SSL: {ssl})");
     let tunn = match get_tunn(&state, &host).await {
         Ok(tunn) => tunn,
         Err(TunnelError::TunnelDoesNotExist) => {
+            if ssl == 1 {
+                serve_own_cert(stream).await?;
+                return Ok(());
+            }
+
             _ = crate::utils::write_raw_http_resp(
                 &mut stream,
                 404,
@@ -194,6 +184,11 @@ async fn handle_client(mut stream: TcpStream, state: SharedProxyState, ssl: bool
             anyhow::bail!("");
         }
         Err(TunnelError::NoConnectorForTunnel) => {
+            if ssl == 1 {
+                serve_own_cert(stream).await?;
+                return Ok(());
+            }
+
             _ = crate::utils::write_raw_http_resp(
                 &mut stream,
                 404,
@@ -212,7 +207,6 @@ async fn handle_client(mut stream: TcpStream, state: SharedProxyState, ssl: bool
     let mut tunnel = tunn.2.recv().await?;
 
     tokio::io::copy_bidirectional(&mut stream, &mut tunnel).await?;
-    */
     Ok(())
 }
 
@@ -237,4 +231,20 @@ fn load_certs(path: &Path) -> std::io::Result<Vec<CertificateDer<'static>>> {
 fn load_keys(path: &Path) -> std::io::Result<PrivateKeyDer<'static>> {
     let key = rustls_pemfile::private_key(&mut BufReader::new(File::open(path)?))?.unwrap();
     Ok(key)
+}
+
+async fn serve_own_cert(mut stream: TcpStream) -> Result<()> {
+    let certs = load_certs(Path::new("cert.pem"))?;
+    let privkey = load_keys(Path::new("key.pem"))?;
+
+    let config = tokio_rustls::rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, privkey)?;
+
+    let acceptor = TlsAcceptor::from(Arc::new(config));
+    let mut stream = acceptor.accept(stream).await?;
+    let r = crate::utils::get_raw_http_resp(404, "NOT FOUND", "That tunnel does not exists!");
+
+    stream.write_all(r.as_bytes()).await?;
+    Ok(())
 }

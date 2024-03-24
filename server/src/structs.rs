@@ -3,6 +3,7 @@ use kanal::{AsyncReceiver, AsyncSender};
 use std::{collections::HashMap, sync::Arc};
 use thiserror::Error;
 use tokio::{net::TcpStream, sync::RwLock};
+use tokio_rustls::TlsAcceptor;
 
 pub type TunnelEntry = (
     AsyncSender<u8>,
@@ -11,6 +12,8 @@ pub type TunnelEntry = (
 );
 
 pub struct ProxyState {
+    pub tls_acceptor: TlsAcceptor,
+
     pub tunnels: HashMap<u128, TunnelEntry>,
     pub clients: HashMap<u64, u128>, // url(hashed) -> token
 }
@@ -19,8 +22,10 @@ pub struct ProxyState {
 pub struct SharedProxyState(Arc<RwLock<ProxyState>>);
 
 impl SharedProxyState {
-    pub fn new() -> Self {
+    pub fn new(ssl_acceptor: TlsAcceptor) -> Self {
         SharedProxyState(Arc::new(RwLock::new(ProxyState {
+            tls_acceptor: ssl_acceptor,
+
             tunnels: HashMap::new(),
             clients: HashMap::new(),
         })))
@@ -67,6 +72,11 @@ impl SharedProxyState {
     pub async fn remove_tunnel(&self, token: u128) {
         let mut state = self.0.write().await;
         state.tunnels.remove(&token);
+    }
+
+    pub async fn get_tls_acceptor(&self) -> TlsAcceptor {
+        let state = self.0.read().await;
+        state.tls_acceptor.clone()
     }
 }
 

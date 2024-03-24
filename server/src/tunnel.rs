@@ -6,27 +6,13 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
-use tokio_rustls::{
-    rustls::{
-        pki_types::{CertificateDer, PrivateKeyDer},
-        server::Acceptor,
-    },
-    TlsAcceptor,
-};
+use tokio_rustls::{rustls::server::Acceptor, TlsAcceptor};
 
 pub async fn spawn_tunnel_connector(
     remote_addrs: Vec<(&str, bool)>,
     connector_addr: &str,
+    shared_proxy_state: SharedProxyState,
 ) -> Result<()> {
-    let shared_proxy_state = SharedProxyState::new();
-    shared_proxy_state
-        .insert_client("test.fkm.filipton.space", 0x6942069420)
-        .await;
-
-    shared_proxy_state
-        .insert_client("dsa.fkm.filipton.space", 0x69420)
-        .await;
-
     for remote_addr in remote_addrs {
         tokio::task::spawn(remote_listener(
             remote_addr.0.to_string(),
@@ -145,54 +131,36 @@ async fn handle_client(mut stream: TcpStream, state: SharedProxyState, ssl: bool
             .ok_or_else(|| anyhow::anyhow!("No server name"))?
             .to_string()
     } else {
-        let mut start = 0;
-        let mut stop = 0;
-        for i in 0..n {
-            if in_buffer[i] == b'\n' {
-                if start == 0 {
-                    start = i + 1;
-                    continue;
-                } else if stop == 0 {
-                    stop = i - 1;
-                    break;
-                }
-            }
-        }
+        let mut lines = in_buffer[..n].split(|&x| x == b'\n');
+        let host = lines
+            .find(|x| x.starts_with(b"Host:"))
+            .ok_or_else(|| anyhow::anyhow!("No host"))?;
 
-        // Skip "Host: " part of host header (to get host only)
-        start += 6;
-        String::from_utf8_lossy(&in_buffer[start..stop]).to_string()
+        String::from_utf8_lossy(&host[5..]).trim().to_string()
     };
 
-    let ssl = u8::from(ssl);
     let tunn = match get_tunn(&state, &host).await {
         Ok(tunn) => tunn,
         Err(TunnelError::TunnelDoesNotExist) => {
-            if ssl == 1 {
-                serve_own_cert(stream).await?;
-                return Ok(());
-            }
-
             _ = crate::utils::write_raw_http_resp(
                 &mut stream,
                 404,
                 "NOT FOUND",
                 "That tunnel does not exists!",
+                ssl,
+                &state,
             )
             .await;
             anyhow::bail!("");
         }
         Err(TunnelError::NoConnectorForTunnel) => {
-            if ssl == 1 {
-                serve_own_cert(stream).await?;
-                return Ok(());
-            }
-
             _ = crate::utils::write_raw_http_resp(
                 &mut stream,
                 404,
                 "NOT FOUND",
                 "Connector for this tunnel isn't connected!",
+                ssl,
+                &state,
             )
             .await;
             anyhow::bail!("");
@@ -202,7 +170,7 @@ async fn handle_client(mut stream: TcpStream, state: SharedProxyState, ssl: bool
         }
     };
 
-    tunn.0.send(ssl).await?;
+    tunn.0.send(u8::from(ssl)).await?;
     let mut tunnel = tunn.2.recv().await?;
 
     tokio::io::copy_bidirectional(&mut stream, &mut tunnel).await?;
@@ -221,29 +189,4 @@ async fn get_tunn(state: &SharedProxyState, host: &str) -> Result<TunnelEntry, T
         .ok_or_else(|| TunnelError::NoConnectorForTunnel)?;
 
     Ok(tunn)
-}
-
-fn load_certs(path: &Path) -> std::io::Result<Vec<CertificateDer<'static>>> {
-    rustls_pemfile::certs(&mut BufReader::new(File::open(path)?)).collect()
-}
-
-fn load_keys(path: &Path) -> std::io::Result<PrivateKeyDer<'static>> {
-    let key = rustls_pemfile::private_key(&mut BufReader::new(File::open(path)?))?.unwrap();
-    Ok(key)
-}
-
-async fn serve_own_cert(stream: TcpStream) -> Result<()> {
-    let certs = load_certs(Path::new("cert.pem"))?;
-    let privkey = load_keys(Path::new("key.pem"))?;
-
-    let config = tokio_rustls::rustls::ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(certs, privkey)?;
-
-    let acceptor = TlsAcceptor::from(Arc::new(config));
-    let mut stream = acceptor.accept(stream).await?;
-    let r = crate::utils::get_raw_http_resp(404, "NOT FOUND", "That tunnel does not exists!");
-
-    stream.write_all(r.as_bytes()).await?;
-    Ok(())
 }

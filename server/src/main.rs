@@ -1,4 +1,8 @@
+use std::{path::Path, sync::Arc};
+
+use crate::structs::SharedProxyState;
 use anyhow::Result;
+use tokio_rustls::TlsAcceptor;
 
 mod structs;
 mod tunnel;
@@ -12,9 +16,30 @@ async fn main() -> Result<()> {
     let connector_addr = "0.0.0.0:6969".to_string();
 
     let addrs = addrs.split(',').collect::<Vec<_>>();
-    let addrs = addrs.iter().map(|s| (*s, s.ends_with("443"))).collect::<Vec<_>>();
+    let addrs = addrs
+        .iter()
+        .map(|s| (*s, s.ends_with("443")))
+        .collect::<Vec<_>>();
 
-    tunnel::spawn_tunnel_connector(addrs, &connector_addr).await?;
+    let certs = crate::utils::load_certs(Path::new("cert.pem"))?;
+    let privkey = crate::utils::load_keys(Path::new("key.pem"))?;
+
+    let config = tokio_rustls::rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, privkey)?;
+
+    let acceptor = TlsAcceptor::from(Arc::new(config));
+    let shared_proxy_state = SharedProxyState::new(acceptor);
+
+    shared_proxy_state
+        .insert_client("test2.fkm.filipton.space", 0x6942069420)
+        .await;
+
+    shared_proxy_state
+        .insert_client("dsa.fkm.filipton.space", 0x69420)
+        .await;
+
+    tunnel::spawn_tunnel_connector(addrs, &connector_addr, shared_proxy_state.clone()).await?;
 
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     tokio::select! {

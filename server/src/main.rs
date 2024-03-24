@@ -39,6 +39,10 @@ async fn main() -> Result<()> {
         .insert_client("dsa.fkm.filipton.space", 0x69420)
         .await;
 
+    shared_proxy_state
+        .insert_client("sls.fkm.filipton.space", 0x69420)
+        .await;
+
     tunnel::spawn_tunnel_connector(addrs, &connector_addr, shared_proxy_state.clone()).await?;
 
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;

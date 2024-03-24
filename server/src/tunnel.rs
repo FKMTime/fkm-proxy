@@ -1,12 +1,10 @@
-use std::{fs::File, io::BufReader, path::Path, sync::Arc};
-
 use crate::structs::{SharedProxyState, TunnelEntry, TunnelError};
 use anyhow::{anyhow, Result};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
-use tokio_rustls::{rustls::server::Acceptor, TlsAcceptor};
+use tokio_rustls::rustls::server::Acceptor;
 
 pub async fn spawn_tunnel_connector(
     remote_addrs: Vec<(&str, bool)>,
@@ -151,7 +149,7 @@ async fn handle_client(mut stream: TcpStream, state: SharedProxyState, ssl: bool
                 &state,
             )
             .await;
-            anyhow::bail!("");
+            anyhow::bail!("Tunnel does not exist!");
         }
         Err(TunnelError::NoConnectorForTunnel) => {
             _ = crate::utils::write_raw_http_resp(
@@ -163,7 +161,7 @@ async fn handle_client(mut stream: TcpStream, state: SharedProxyState, ssl: bool
                 &state,
             )
             .await;
-            anyhow::bail!("");
+            anyhow::bail!("No connector for tunnel!");
         }
         _ => {
             anyhow::bail!("Error getting tunnel!");

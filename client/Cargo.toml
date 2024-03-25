@@ -14,3 +14,10 @@ dotenvy = "0.15.7"
 rustls-pemfile = "2.1.1"
 tokio = { version = "1.36.0", features = ["full"] }
 tokio-rustls = "0.26.0"
+
+[profile.release]
+opt-level = "z"     # Optimize for size.
+lto = true          # Enable Link Time Optimization
+codegen-units = 1   # Reduce number of codegen units to increase optimizations.
+panic = "abort"     # Abort on panic
+strip = true        # Automatically strip symbols from the binary.

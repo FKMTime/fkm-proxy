@@ -30,10 +30,11 @@ pub async fn cert_loader(
     let mut ord_new = acc.new_order(&domain, &[])?;
 
     let ord_csr = loop {
-        println!("Starting acme challenge responder");
         if let Some(ord_csr) = ord_new.confirm_validations() {
             break ord_csr;
         }
+
+        println!("Starting acme challenge responder");
 
         let auths = ord_new.authorizations()?;
         let chall = auths[0].http_challenge();
@@ -59,6 +60,7 @@ pub async fn cert_loader(
     let ord_cert = ord_csr.finalize_pkey(pkey_pri, 5000)?;
     _ = ord_cert.download_and_save_cert()?;
 
+    println!("Certificate generated successfully");
     get_crt_key(Path::new(cert_path))
 }
 

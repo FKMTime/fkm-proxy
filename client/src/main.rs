@@ -1,3 +1,9 @@
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use aes_gcm::{
+    aead::{Aead, Buffer, OsRng},
+    AeadCore, Aes128Gcm, KeyInit,
+};
 use anyhow::Result;
 use clap::{command, Parser};
 use tokio::{
@@ -24,8 +30,36 @@ struct Args {
     token: u128,
 }
 
+pub fn generate_hello_packet(token: &u128, hash: &u64) -> [u8; 80] {
+    let mut conn_buff = [0u8; 80];
+    conn_buff[0] = 0x00; // connector type
+    conn_buff[1..9].copy_from_slice(&hash.to_be_bytes());
+
+    let cipher = Aes128Gcm::new_from_slice(token.to_be_bytes().as_ref()).unwrap();
+    let nonce = Aes128Gcm::generate_nonce(&mut OsRng); // 12 bytes
+    conn_buff[10..22].copy_from_slice(nonce.as_slice());
+
+    let generated_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    let mut auth_bytes = [0u8; 24]; // KEY(16B) + TIMESTAMP(8B)
+    auth_bytes[..16].copy_from_slice(token.to_be_bytes().as_ref());
+    auth_bytes[16..].copy_from_slice(&generated_at.to_be_bytes());
+
+    let encrypted = cipher.encrypt(&nonce, auth_bytes.as_ref()).unwrap(); // 40 bytes
+    conn_buff[23..63].copy_from_slice(encrypted.as_ref());
+    conn_buff
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    let packet = generate_hello_packet(&0x1234567890abcdef, &0x1234567890abcdef);
+    println!("{:?}", packet);
+
+    return Ok(());
+
     _ = dotenvy::dotenv();
     let args = Args::parse();
 

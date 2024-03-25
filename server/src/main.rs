@@ -21,8 +21,8 @@ async fn main() -> Result<()> {
         .map(|s| (*s, s.ends_with("443")))
         .collect::<Vec<_>>();
 
-    let certs = crate::utils::load_certs(Path::new("cert.pem"))?;
-    let privkey = crate::utils::load_keys(Path::new("key.pem"))?;
+    let certs = crate::utils::load_certs(Path::new("key.crt"))?;
+    let privkey = crate::utils::load_keys(Path::new("priv.key"))?;
 
     let config = tokio_rustls::rustls::ServerConfig::builder()
         .with_no_client_auth()
@@ -31,6 +31,7 @@ async fn main() -> Result<()> {
     let acceptor = TlsAcceptor::from(Arc::new(config));
     let shared_proxy_state = SharedProxyState::new(acceptor);
 
+    /*
     shared_proxy_state
         .insert_client("test2.fkm.filipton.space", 0x6942069420)
         .await;
@@ -41,6 +42,18 @@ async fn main() -> Result<()> {
 
     shared_proxy_state
         .insert_client("sls.fkm.filipton.space", 0x69420)
+        .await;
+
+    shared_proxy_state
+        .insert_client("t1.fkm.filipton.space", 123456789)
+        .await;
+
+    shared_proxy_state
+        .insert_client("t2.fkm.filipton.space", 987654321)
+        .await;
+    */
+    shared_proxy_state
+        .insert_client("localhost", 69420)
         .await;
 
     tunnel::spawn_tunnel_connector(addrs, &connector_addr, shared_proxy_state.clone()).await?;

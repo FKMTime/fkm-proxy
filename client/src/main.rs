@@ -1,21 +1,14 @@
-use acme_lib::{create_p384_key, persist::FilePersist, Directory, DirectoryUrl};
-use aes_gcm::{
-    aead::{Aead, Buffer, OsRng},
-    AeadCore, Aes128Gcm, KeyInit,
-};
 use anyhow::Result;
 use clap::{command, Parser};
-use std::{
-    path::Path,
-    sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::{path::Path, sync::Arc};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
 };
 use tokio_rustls::TlsAcceptor;
+use utils::generate_hello_packet;
 
+mod cert;
 mod utils;
 
 #[derive(Parser, Debug, Clone)]
@@ -37,77 +30,21 @@ struct Args {
     token: u128,
 }
 
-pub fn generate_hello_packet(connector_type: u8, token: &u128, hash: &u64) -> [u8; 80] {
-    let mut conn_buff = [0u8; 80];
-    conn_buff[0] = connector_type;
-    conn_buff[1..9].copy_from_slice(&hash.to_be_bytes());
-
-    let cipher = Aes128Gcm::new_from_slice(token.to_be_bytes().as_ref()).unwrap();
-    let nonce = Aes128Gcm::generate_nonce(&mut OsRng); // 12 bytes
-    conn_buff[10..22].copy_from_slice(nonce.as_slice());
-
-    let generated_at = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-
-    let mut auth_bytes = [0u8; 24]; // KEY(16B) + TIMESTAMP(8B)
-    auth_bytes[..16].copy_from_slice(token.to_be_bytes().as_ref());
-    auth_bytes[16..24].copy_from_slice(&generated_at.to_be_bytes());
-
-    let encrypted = cipher.encrypt(&nonce, auth_bytes.as_ref()).unwrap(); // 40 bytes
-    conn_buff[23..63].copy_from_slice(encrypted.as_ref());
-    conn_buff
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     _ = dotenvy::dotenv();
     let args = Args::parse();
 
-    /*
-    let url = DirectoryUrl::LetsEncryptStaging;
-    let persist = FilePersist::new("/tmp/acme");
-    let dir = Directory::from_url(persist, url)?;
+    let (key, crt) =
+        cert::cert_loader(args.token, args.hash, &args.proxy_addr, "/tmp/acme").await?;
 
-    let acc = dir.account("gfsverwvr@filipton.space")?;
-    let mut ord_new = acc.new_order("test.fkm.filipton.space", &[])?;
+    let certs = crate::utils::load_certs(Path::new(&crt))?;
+    let privkey = crate::utils::load_keys(Path::new(&key))?;
+    let config = tokio_rustls::rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, privkey)?;
 
-    let ord_csr = loop {
-        if let Some(ord_csr) = ord_new.confirm_validations() {
-            break ord_csr;
-        }
-
-        let auths = ord_new.authorizations()?;
-
-        let chall = auths[0].http_challenge();
-
-        let token = chall.http_token();
-        let path = format!("/.well-known/acme-challenge/{}", token);
-
-        let proof = chall.http_proof();
-
-        println!("path: {}", path);
-        println!("proof: {}", proof);
-
-        let task = tokio::task::spawn(spawn_acme_responder(
-            args.token.clone(),
-            args.hash.clone(),
-            args.proxy_addr.clone(),
-            proof,
-            path,
-        ));
-
-        chall.validate(5000)?;
-        task.abort();
-
-        ord_new.refresh()?;
-    };
-
-    let pkey_pri = create_p384_key();
-    let ord_cert = ord_csr.finalize_pkey(pkey_pri, 5000)?;
-    let cert = ord_cert.download_and_save_cert()?;
-    */
+    let acceptor = TlsAcceptor::from(Arc::new(config));
 
     let mut connector = TcpStream::connect(&args.proxy_addr).await?;
     let hello_packet = generate_hello_packet(0, &args.token, &args.hash);
@@ -133,6 +70,7 @@ async fn main() -> Result<()> {
             args.nossl.to_string(),
             args.proxy_addr.to_string(),
             ssl,
+            acceptor.clone(),
         ));
     }
 
@@ -144,6 +82,7 @@ async fn spawn_tunnel(
     local_addr: String,
     proxy_addr: String,
     ssl: bool,
+    acceptor: TlsAcceptor,
 ) -> Result<()> {
     let mut tunnel_stream = TcpStream::connect(proxy_addr).await?;
     tunnel_stream.set_nodelay(true)?;
@@ -153,66 +92,11 @@ async fn spawn_tunnel(
     local_stream.set_nodelay(true)?;
 
     if ssl {
-        let certs = crate::utils::load_certs(Path::new("key.crt"))?;
-        let privkey = crate::utils::load_keys(Path::new("priv.key"))?;
-
-        let config = tokio_rustls::rustls::ServerConfig::builder()
-            .with_no_client_auth()
-            .with_single_cert(certs, privkey)?;
-
-        let acceptor = TlsAcceptor::from(Arc::new(config));
         let mut stream = acceptor.accept(tunnel_stream).await?;
-
         tokio::io::copy_bidirectional(&mut local_stream, &mut stream).await?;
     } else {
         tokio::io::copy_bidirectional(&mut local_stream, &mut tunnel_stream).await?;
     }
 
     Ok(())
-}
-
-async fn spawn_acme_responder(
-    token: u128,
-    hash: u64,
-    proxy_addr: String,
-    acme_proof: String,
-    acme_url: String,
-) -> Result<()> {
-    let mut connector = TcpStream::connect(&proxy_addr).await?;
-    let hello_packet = generate_hello_packet(0, &token, &hash);
-    connector.write_all(&hello_packet).await?;
-
-    loop {
-        _ = connector.read_u8().await?;
-        let hello_packet = generate_hello_packet(1, &token, &hash);
-
-        let mut tunnel_stream = TcpStream::connect(&proxy_addr).await?;
-        tunnel_stream.set_nodelay(true)?;
-        tunnel_stream.write_all(&hello_packet).await?;
-
-        let mut parts = String::new();
-        let mut buffer = [0u8; 1];
-        loop {
-            tunnel_stream.read(&mut buffer).await?;
-            if buffer[0] == 0x0A {
-                break;
-            }
-            parts.push(buffer[0] as char);
-        }
-
-        let parts = parts.trim().split(" ").collect::<Vec<&str>>();
-        let url = parts[1];
-
-        if url == acme_url {
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
-                acme_proof.len(),
-                acme_proof
-            );
-
-            tunnel_stream.write_all(response.as_bytes()).await?;
-        }
-    }
-
-    // Ok(())
 }

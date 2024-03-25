@@ -15,7 +15,8 @@ pub struct ProxyState {
     pub tls_acceptor: TlsAcceptor,
 
     pub tunnels: HashMap<u128, TunnelEntry>,
-    pub clients: HashMap<u64, u128>, // url(hashed) -> token
+    pub tokens: HashMap<u64, u128>,    // url(hashed) -> token
+    pub domains: HashMap<u64, String>, // url(hashed) -> domain
 }
 
 #[derive(Clone)]
@@ -27,7 +28,8 @@ impl SharedProxyState {
             tls_acceptor: ssl_acceptor,
 
             tunnels: HashMap::new(),
-            clients: HashMap::new(),
+            tokens: HashMap::new(),
+            domains: HashMap::new(),
         })))
     }
 
@@ -36,7 +38,8 @@ impl SharedProxyState {
         let hash = HighwayHasher::default().hash64(url.as_bytes());
         println!("New url: {url} with hash: {hash}");
 
-        state.clients.insert(hash, token);
+        state.domains.insert(hash, url.to_string());
+        state.tokens.insert(hash, token);
     }
 
     pub async fn insert_tunnel_connector(&self, token: u128, tunnel: TunnelEntry) {
@@ -51,12 +54,12 @@ impl SharedProxyState {
     pub async fn get_client_token(&self, url: &str) -> Option<u128> {
         let state = self.0.read().await;
         let hash = HighwayHasher::default().hash64(url.as_bytes());
-        state.clients.get(&hash).copied()
+        state.tokens.get(&hash).copied()
     }
 
     pub async fn get_token_by_url_hash(&self, url_hash: u64) -> Option<u128> {
         let state = self.0.read().await;
-        state.clients.get(&url_hash).copied()
+        state.tokens.get(&url_hash).copied()
     }
 
     pub async fn get_tunnel_entry(&self, token: u128) -> Option<TunnelEntry> {
@@ -77,6 +80,11 @@ impl SharedProxyState {
     pub async fn get_tls_acceptor(&self) -> TlsAcceptor {
         let state = self.0.read().await;
         state.tls_acceptor.clone()
+    }
+
+    pub async fn get_domain_by_hash(&self, hash: u64) -> Option<String> {
+        let state = self.0.read().await;
+        state.domains.get(&hash).cloned()
     }
 }
 

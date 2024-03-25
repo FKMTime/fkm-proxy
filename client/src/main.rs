@@ -20,14 +20,20 @@ struct Args {
     #[arg(short, long, default_value = "127.0.0.1:80", env = "LOCAL_NOSSL")]
     nossl: String,
 
+    /*
+    For now its not supported
+
     #[arg(short, long, default_value = "127.0.0.1:443", env = "LOCAL_SSL")]
     ssl: String,
-
+    */
     #[arg(long, env = "HASH")]
     hash: u64,
 
     #[arg(short, long, env = "TOKEN")]
     token: u128,
+
+    #[arg(short, long, env = "EMAIL")]
+    email: String,
 }
 
 #[tokio::main]
@@ -35,8 +41,14 @@ async fn main() -> Result<()> {
     _ = dotenvy::dotenv();
     let args = Args::parse();
 
-    let (key, crt) =
-        cert::cert_loader(args.token, args.hash, &args.proxy_addr, "/tmp/acme").await?;
+    let (key, crt) = cert::cert_loader(
+        args.token,
+        args.hash,
+        &args.proxy_addr,
+        "/tmp/acme",
+        &args.email,
+    )
+    .await?;
 
     let certs = crate::utils::load_certs(Path::new(&crt))?;
     let privkey = crate::utils::load_keys(Path::new(&key))?;

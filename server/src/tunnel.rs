@@ -51,6 +51,17 @@ async fn connector_handler(mut stream: TcpStream, state: SharedProxyState) -> Re
         .await
         .ok_or_else(|| anyhow!("Cant find token!"))?;
 
+    // get domain from hash
+    if connection_buff[0] == 2 {
+        let domain = state
+            .get_domain_by_hash(url_hash)
+            .await
+            .ok_or_else(|| anyhow!("Cant find domain!"))?;
+
+        stream.write_all(domain.as_bytes()).await?;
+        return Ok(());
+    }
+
     let nonce = Nonce::from_slice(&connection_buff[10..22]);
     let cipher = Aes128Gcm::new_from_slice(token.to_be_bytes().as_ref()).unwrap();
     let decrypted_buff = cipher
@@ -60,7 +71,6 @@ async fn connector_handler(mut stream: TcpStream, state: SharedProxyState) -> Re
     let decrypted_token = u128::from_be_bytes(decrypted_buff[0..16].try_into()?);
     let timestamp = u64::from_be_bytes(decrypted_buff[16..24].try_into()?);
 
-    println!("Connector connected: timestamp: {timestamp}");
     if token != decrypted_token {
         println!("Token mismatch! {token} != {decrypted_token}");
         return Ok(());

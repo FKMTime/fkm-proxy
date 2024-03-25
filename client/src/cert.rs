@@ -13,6 +13,7 @@ pub async fn cert_loader(
     hash: u64,
     proxy_addr: &str,
     cert_path: &str,
+    email: &str,
 ) -> Result<(String, String)> {
     if let Ok((key, crt)) = get_crt_key(Path::new(cert_path)) {
         return Ok((key, crt));
@@ -23,8 +24,9 @@ pub async fn cert_loader(
     let persist = FilePersist::new(cert_path);
     let dir = Directory::from_url(persist, url)?;
 
-    let acc = dir.account("gfsverwvr@filipton.space")?;
-    let mut ord_new = acc.new_order("test.fkm.filipton.space", &[])?;
+    let acc = dir.account(email)?;
+    let domain = get_domain_by_hash(hash, proxy_addr.to_string()).await?;
+    let mut ord_new = acc.new_order(&domain, &[])?;
 
     let ord_csr = loop {
         println!("Starting acme challenge responder");
@@ -103,6 +105,20 @@ async fn spawn_acme_responder(
     }
 
     // Ok(())
+}
+
+async fn get_domain_by_hash(hash: u64, proxy_addr: String) -> Result<String> {
+    let mut connector = TcpStream::connect(&proxy_addr).await?;
+    let mut buf = [0u8; 80];
+    buf[0] = 0x02; // get domain by hash
+    buf[1..9].copy_from_slice(&hash.to_be_bytes());
+
+    connector.write_all(&buf).await?;
+
+    let mut domain = String::new();
+    connector.read_to_string(&mut domain).await?;
+
+    Ok(domain)
 }
 
 fn get_crt_key(cert_path: &Path) -> Result<(String, String)> {

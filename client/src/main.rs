@@ -1,3 +1,4 @@
+use acme_lib::{create_p384_key, persist::FilePersist, Directory, DirectoryUrl};
 use aes_gcm::{
     aead::{Aead, Buffer, OsRng},
     AeadCore, Aes128Gcm, KeyInit,
@@ -29,7 +30,7 @@ struct Args {
     #[arg(short, long, default_value = "127.0.0.1:443", env = "LOCAL_SSL")]
     ssl: String,
 
-    #[arg(short, long, env = "HASH")]
+    #[arg(long, env = "HASH")]
     hash: u64,
 
     #[arg(short, long, env = "TOKEN")]
@@ -64,6 +65,50 @@ async fn main() -> Result<()> {
     _ = dotenvy::dotenv();
     let args = Args::parse();
 
+    /*
+    let url = DirectoryUrl::LetsEncryptStaging;
+    let persist = FilePersist::new("/tmp/acme");
+    let dir = Directory::from_url(persist, url)?;
+
+    let acc = dir.account("gfsverwvr@filipton.space")?;
+    let mut ord_new = acc.new_order("test.fkm.filipton.space", &[])?;
+
+    let ord_csr = loop {
+        if let Some(ord_csr) = ord_new.confirm_validations() {
+            break ord_csr;
+        }
+
+        let auths = ord_new.authorizations()?;
+
+        let chall = auths[0].http_challenge();
+
+        let token = chall.http_token();
+        let path = format!("/.well-known/acme-challenge/{}", token);
+
+        let proof = chall.http_proof();
+
+        println!("path: {}", path);
+        println!("proof: {}", proof);
+
+        let task = tokio::task::spawn(spawn_acme_responder(
+            args.token.clone(),
+            args.hash.clone(),
+            args.proxy_addr.clone(),
+            proof,
+            path,
+        ));
+
+        chall.validate(5000)?;
+        task.abort();
+
+        ord_new.refresh()?;
+    };
+
+    let pkey_pri = create_p384_key();
+    let ord_cert = ord_csr.finalize_pkey(pkey_pri, 5000)?;
+    let cert = ord_cert.download_and_save_cert()?;
+    */
+
     let mut connector = TcpStream::connect(&args.proxy_addr).await?;
     let hello_packet = generate_hello_packet(0, &args.token, &args.hash);
 
@@ -91,7 +136,7 @@ async fn main() -> Result<()> {
         ));
     }
 
-    //Ok(())
+    // Ok(())
 }
 
 async fn spawn_tunnel(
@@ -124,4 +169,50 @@ async fn spawn_tunnel(
     }
 
     Ok(())
+}
+
+async fn spawn_acme_responder(
+    token: u128,
+    hash: u64,
+    proxy_addr: String,
+    acme_proof: String,
+    acme_url: String,
+) -> Result<()> {
+    let mut connector = TcpStream::connect(&proxy_addr).await?;
+    let hello_packet = generate_hello_packet(0, &token, &hash);
+    connector.write_all(&hello_packet).await?;
+
+    loop {
+        _ = connector.read_u8().await?;
+        let hello_packet = generate_hello_packet(1, &token, &hash);
+
+        let mut tunnel_stream = TcpStream::connect(&proxy_addr).await?;
+        tunnel_stream.set_nodelay(true)?;
+        tunnel_stream.write_all(&hello_packet).await?;
+
+        let mut parts = String::new();
+        let mut buffer = [0u8; 1];
+        loop {
+            tunnel_stream.read(&mut buffer).await?;
+            if buffer[0] == 0x0A {
+                break;
+            }
+            parts.push(buffer[0] as char);
+        }
+
+        let parts = parts.trim().split(" ").collect::<Vec<&str>>();
+        let url = parts[1];
+
+        if url == acme_url {
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
+                acme_proof.len(),
+                acme_proof
+            );
+
+            tunnel_stream.write_all(response.as_bytes()).await?;
+        }
+    }
+
+    // Ok(())
 }

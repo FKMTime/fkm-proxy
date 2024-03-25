@@ -1,11 +1,10 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use aes_gcm::{
     aead::{Aead, Buffer, OsRng},
     AeadCore, Aes128Gcm, KeyInit,
 };
 use anyhow::Result;
 use clap::{command, Parser};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -30,9 +29,9 @@ struct Args {
     token: u128,
 }
 
-pub fn generate_hello_packet(token: &u128, hash: &u64) -> [u8; 80] {
+pub fn generate_hello_packet(connector_type: u8, token: &u128, hash: &u64) -> [u8; 80] {
     let mut conn_buff = [0u8; 80];
-    conn_buff[0] = 0x00; // connector type
+    conn_buff[0] = connector_type;
     conn_buff[1..9].copy_from_slice(&hash.to_be_bytes());
 
     let cipher = Aes128Gcm::new_from_slice(token.to_be_bytes().as_ref()).unwrap();
@@ -46,7 +45,7 @@ pub fn generate_hello_packet(token: &u128, hash: &u64) -> [u8; 80] {
 
     let mut auth_bytes = [0u8; 24]; // KEY(16B) + TIMESTAMP(8B)
     auth_bytes[..16].copy_from_slice(token.to_be_bytes().as_ref());
-    auth_bytes[16..].copy_from_slice(&generated_at.to_be_bytes());
+    auth_bytes[16..24].copy_from_slice(&generated_at.to_be_bytes());
 
     let encrypted = cipher.encrypt(&nonce, auth_bytes.as_ref()).unwrap(); // 40 bytes
     conn_buff[23..63].copy_from_slice(encrypted.as_ref());
@@ -55,23 +54,17 @@ pub fn generate_hello_packet(token: &u128, hash: &u64) -> [u8; 80] {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let packet = generate_hello_packet(&0x1234567890abcdef, &0x1234567890abcdef);
-    println!("{:?}", packet);
-
-    return Ok(());
-
     _ = dotenvy::dotenv();
     let args = Args::parse();
 
     let mut connector = TcpStream::connect(&args.proxy_addr).await?;
-    let mut conn_buff = [0u8; 64];
+    let hello_packet = generate_hello_packet(0, &args.token, &args.hash);
+    tokio::time::sleep(tokio::time::Duration::from_secs(6)).await;
 
-    conn_buff[0] = 0x00;
-    conn_buff[1..9].copy_from_slice(&args.hash.to_be_bytes());
-    conn_buff[10..26].copy_from_slice(&args.token.to_be_bytes());
-    connector.write_all(&conn_buff).await?;
+    connector
+        .write_all(&hello_packet)
+        .await?;
 
-    conn_buff[0] = 0x01; // set the first byte to 0x01 to indicate that next connection is a tunnel
     loop {
         let res = connector.read_u8().await?;
         let local_addr = if res == 0x00 {
@@ -82,6 +75,7 @@ async fn main() -> Result<()> {
             continue;
         };
 
+        let conn_buff = generate_hello_packet(1, &args.token, &args.hash);
         tokio::task::spawn(spawn_tunnel(
             conn_buff,
             local_addr,
@@ -92,7 +86,7 @@ async fn main() -> Result<()> {
     //Ok(())
 }
 
-async fn spawn_tunnel(conn_buff: [u8; 64], local_addr: String, proxy_addr: String) -> Result<()> {
+async fn spawn_tunnel(conn_buff: [u8; 80], local_addr: String, proxy_addr: String) -> Result<()> {
     let mut tunnel_stream = TcpStream::connect(proxy_addr).await?;
     tunnel_stream.set_nodelay(true)?;
     tunnel_stream.write_all(&conn_buff).await?;

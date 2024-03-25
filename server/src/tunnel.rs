@@ -1,10 +1,13 @@
 use crate::structs::{SharedProxyState, TunnelEntry, TunnelError};
+use aes_gcm::{aead::Aead, Aes128Gcm, KeyInit, Nonce};
 use anyhow::{anyhow, Result};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
 use tokio_rustls::rustls::server::Acceptor;
+
+const HELLO_PACKET_LIVE_TIME: u64 = 5;
 
 pub async fn spawn_tunnel_connector(
     remote_addrs: Vec<(&str, bool)>,
@@ -39,20 +42,36 @@ async fn connector_listener(addr: String, state: SharedProxyState) -> Result<()>
 }
 
 async fn connector_handler(mut stream: TcpStream, state: SharedProxyState) -> Result<()> {
-    let mut connection_buff = [0u8; 64];
+    let mut connection_buff = [0u8; 80];
     stream.read_exact(&mut connection_buff).await?;
 
     let url_hash: u64 = u64::from_be_bytes(connection_buff[1..9].try_into()?);
-
-    // token should be encrypted using aes or sth!
-    let token: u128 = u128::from_be_bytes(connection_buff[10..26].try_into()?);
-
-    let url_client_token = state
+    let token = state
         .get_token_by_url_hash(url_hash)
         .await
         .ok_or_else(|| anyhow!("Cant find token!"))?;
 
-    if token != url_client_token {
+    let nonce = Nonce::from_slice(&connection_buff[10..22]);
+    let cipher = Aes128Gcm::new_from_slice(token.to_be_bytes().as_ref()).unwrap();
+    let decrypted_buff = cipher
+        .decrypt(nonce, &connection_buff[23..63])
+        .map_err(|_| anyhow!("Cant decrypt!"))?;
+
+    let decrypted_token = u128::from_be_bytes(decrypted_buff[0..16].try_into()?);
+    let timestamp = u64::from_be_bytes(decrypted_buff[16..24].try_into()?);
+
+    println!("Connector connected: timestamp: {timestamp}");
+    if token != decrypted_token {
+        println!("Token mismatch! {token} != {decrypted_token}");
+        return Ok(());
+    }
+
+    let current_time = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs();
+
+    if current_time - timestamp > HELLO_PACKET_LIVE_TIME {
+        println!("Hello packet is too old!");
         return Ok(());
     }
 

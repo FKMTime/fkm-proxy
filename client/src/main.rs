@@ -34,6 +34,9 @@ struct Args {
 
     #[arg(short, long, env = "EMAIL")]
     email: String,
+
+    #[arg(short, long, action, env = "REDIRECT_SSL")]
+    redirect_ssl: bool,
 }
 
 #[tokio::main]
@@ -50,13 +53,15 @@ async fn main() -> Result<()> {
     )
     .await?;
 
-    let certs = crate::utils::load_certs(Path::new(&crt))?;
-    let privkey = crate::utils::load_keys(Path::new(&key))?;
+    let certs = cert::load_certs(Path::new(&crt))?;
+    let privkey = cert::load_keys(Path::new(&key))?;
     let config = tokio_rustls::rustls::ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(certs, privkey)?;
 
     let acceptor = TlsAcceptor::from(Arc::new(config));
+
+    let domain = utils::get_domain_by_hash(args.hash, args.proxy_addr.to_string()).await?;
 
     let mut connector = TcpStream::connect(&args.proxy_addr).await?;
     let hello_packet = generate_hello_packet(0, &args.token, &args.hash);
@@ -82,6 +87,8 @@ async fn main() -> Result<()> {
             args.nossl.to_string(),
             args.proxy_addr.to_string(),
             ssl,
+            args.redirect_ssl,
+            domain.clone(),
             acceptor.clone(),
         ));
     }
@@ -94,6 +101,8 @@ async fn spawn_tunnel(
     local_addr: String,
     proxy_addr: String,
     ssl: bool,
+    redirect_ssl: bool,
+    domain: String,
     acceptor: TlsAcceptor,
 ) -> Result<()> {
     let mut tunnel_stream = TcpStream::connect(proxy_addr).await?;
@@ -106,6 +115,21 @@ async fn spawn_tunnel(
     if ssl {
         let mut stream = acceptor.accept(tunnel_stream).await?;
         tokio::io::copy_bidirectional(&mut local_stream, &mut stream).await?;
+    } else if redirect_ssl {
+        let mut buffer = [0u8; 1];
+        let mut parts = String::new();
+        loop {
+            tunnel_stream.read(&mut buffer).await?;
+            if buffer[0] == 0x0A {
+                break;
+            }
+            parts.push(buffer[0] as char);
+        }
+
+        let parts = parts.trim().split(" ").collect::<Vec<&str>>();
+        let path = parts[1];
+        let redirect = utils::construct_http_redirect(&format!("https://{domain}{path}"));
+        tunnel_stream.write_all(redirect.as_bytes()).await?;
     } else {
         tokio::io::copy_bidirectional(&mut local_stream, &mut tunnel_stream).await?;
     }

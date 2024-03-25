@@ -2,22 +2,12 @@ use aes_gcm::{
     aead::{Aead, OsRng},
     AeadCore, Aes128Gcm, KeyInit,
 };
-use std::{
-    fs::File,
-    io::BufReader,
-    path::Path,
-    time::{SystemTime, UNIX_EPOCH},
+use anyhow::Result;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpStream,
 };
-use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
-
-pub fn load_certs(path: &Path) -> std::io::Result<Vec<CertificateDer<'static>>> {
-    rustls_pemfile::certs(&mut BufReader::new(File::open(path)?)).collect()
-}
-
-pub fn load_keys(path: &Path) -> std::io::Result<PrivateKeyDer<'static>> {
-    let key = rustls_pemfile::private_key(&mut BufReader::new(File::open(path)?))?.unwrap();
-    Ok(key)
-}
 
 pub fn generate_hello_packet(connector_type: u8, token: &u128, hash: &u64) -> [u8; 80] {
     let mut conn_buff = [0u8; 80];
@@ -40,4 +30,25 @@ pub fn generate_hello_packet(connector_type: u8, token: &u128, hash: &u64) -> [u
     let encrypted = cipher.encrypt(&nonce, auth_bytes.as_ref()).unwrap(); // 40 bytes
     conn_buff[23..63].copy_from_slice(encrypted.as_ref());
     conn_buff
+}
+
+pub fn construct_http_redirect(url: &str) -> String {
+    format!(
+        "HTTP/1.1 301 Moved Permanently\r\nLocation: {}\r\nContent-Length: 0\r\n\r\n",
+        url
+    )
+}
+
+pub async fn get_domain_by_hash(hash: u64, proxy_addr: String) -> Result<String> {
+    let mut connector = TcpStream::connect(&proxy_addr).await?;
+    let mut buf = [0u8; 80];
+    buf[0] = 0x02; // get domain by hash
+    buf[1..9].copy_from_slice(&hash.to_be_bytes());
+
+    connector.write_all(&buf).await?;
+
+    let mut domain = String::new();
+    connector.read_to_string(&mut domain).await?;
+
+    Ok(domain)
 }

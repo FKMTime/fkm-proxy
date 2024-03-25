@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{fs::File, io::BufReader, path::Path};
 
 use crate::utils::generate_hello_packet;
 use acme_lib::{persist::FilePersist, Directory, DirectoryUrl};
@@ -7,6 +7,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
 };
+use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 
 pub async fn cert_loader(
     token: u128,
@@ -25,7 +26,7 @@ pub async fn cert_loader(
     let dir = Directory::from_url(persist, url)?;
 
     let acc = dir.account(email)?;
-    let domain = get_domain_by_hash(hash, proxy_addr.to_string()).await?;
+    let domain = crate::utils::get_domain_by_hash(hash, proxy_addr.to_string()).await?;
     let mut ord_new = acc.new_order(&domain, &[])?;
 
     let ord_csr = loop {
@@ -107,20 +108,6 @@ async fn spawn_acme_responder(
     // Ok(())
 }
 
-async fn get_domain_by_hash(hash: u64, proxy_addr: String) -> Result<String> {
-    let mut connector = TcpStream::connect(&proxy_addr).await?;
-    let mut buf = [0u8; 80];
-    buf[0] = 0x02; // get domain by hash
-    buf[1..9].copy_from_slice(&hash.to_be_bytes());
-
-    connector.write_all(&buf).await?;
-
-    let mut domain = String::new();
-    connector.read_to_string(&mut domain).await?;
-
-    Ok(domain)
-}
-
 fn get_crt_key(cert_path: &Path) -> Result<(String, String)> {
     let cert_path = Path::new(cert_path);
     if cert_path.exists() {
@@ -161,4 +148,13 @@ fn get_crt_key(cert_path: &Path) -> Result<(String, String)> {
     }
 
     Err(anyhow::anyhow!("Certificate not found"))
+}
+
+pub fn load_certs(path: &Path) -> std::io::Result<Vec<CertificateDer<'static>>> {
+    rustls_pemfile::certs(&mut BufReader::new(File::open(path)?)).collect()
+}
+
+pub fn load_keys(path: &Path) -> std::io::Result<PrivateKeyDer<'static>> {
+    let key = rustls_pemfile::private_key(&mut BufReader::new(File::open(path)?))?.unwrap();
+    Ok(key)
 }

@@ -1,13 +1,10 @@
-use std::{fs::File, io::BufReader, path::Path};
-
-use crate::utils::generate_hello_packet;
 use acme_lib::{persist::FilePersist, Directory, DirectoryUrl};
 use anyhow::Result;
+use std::path::Path;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
 };
-use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 
 pub async fn cert_loader(
     token: u128,
@@ -21,7 +18,7 @@ pub async fn cert_loader(
     }
 
     println!("Certificate not found, generating new one");
-    let url = DirectoryUrl::LetsEncryptStaging;
+    let url = DirectoryUrl::LetsEncrypt;
     let persist = FilePersist::new(cert_path);
     let dir = Directory::from_url(persist, url)?;
 
@@ -72,12 +69,12 @@ async fn spawn_acme_responder(
     acme_url: String,
 ) -> Result<()> {
     let mut connector = TcpStream::connect(&proxy_addr).await?;
-    let hello_packet = generate_hello_packet(0, &token, &hash);
+    let hello_packet = ::utils::generate_hello_packet(0, &token, &hash)?;
     connector.write_all(&hello_packet).await?;
 
     loop {
         _ = connector.read_u8().await?;
-        let hello_packet = generate_hello_packet(1, &token, &hash);
+        let hello_packet = ::utils::generate_hello_packet(1, &token, &hash)?;
 
         let mut tunnel_stream = TcpStream::connect(&proxy_addr).await?;
         tunnel_stream.set_nodelay(true)?;
@@ -150,13 +147,4 @@ fn get_crt_key(cert_path: &Path) -> Result<(String, String)> {
     }
 
     Err(anyhow::anyhow!("Certificate not found"))
-}
-
-pub fn load_certs(path: &Path) -> std::io::Result<Vec<CertificateDer<'static>>> {
-    rustls_pemfile::certs(&mut BufReader::new(File::open(path)?)).collect()
-}
-
-pub fn load_keys(path: &Path) -> std::io::Result<PrivateKeyDer<'static>> {
-    let key = rustls_pemfile::private_key(&mut BufReader::new(File::open(path)?))?.unwrap();
-    Ok(key)
 }

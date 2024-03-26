@@ -6,7 +6,6 @@ use tokio_rustls::TlsAcceptor;
 
 mod structs;
 mod tunnel;
-mod utils;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -21,8 +20,8 @@ async fn main() -> Result<()> {
         .map(|s| (*s, s.ends_with("443")))
         .collect::<Vec<_>>();
 
-    let certs = crate::utils::load_certs(Path::new("key.crt"))?;
-    let privkey = crate::utils::load_keys(Path::new("priv.key"))?;
+    let certs = ::utils::certs::load_certs(Path::new("key.crt"))?;
+    let privkey = ::utils::certs::load_keys(Path::new("priv.key"))?;
 
     let config = tokio_rustls::rustls::ServerConfig::builder()
         .with_no_client_auth()
@@ -52,9 +51,7 @@ async fn main() -> Result<()> {
         .insert_client("t2.fkm.filipton.space", 987654321)
         .await;
     */
-    shared_proxy_state
-        .insert_client("localhost", 69420)
-        .await;
+    shared_proxy_state.insert_client("localhost", 69420).await;
 
     shared_proxy_state
         .insert_client("test.fkm.filipton.space", 69420)

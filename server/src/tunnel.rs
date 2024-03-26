@@ -1,5 +1,4 @@
 use crate::structs::{SharedProxyState, TunnelEntry, TunnelError};
-use aes_gcm::{aead::Aead, Aes128Gcm, KeyInit, Nonce};
 use anyhow::{anyhow, Result};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -62,26 +61,9 @@ async fn connector_handler(mut stream: TcpStream, state: SharedProxyState) -> Re
         return Ok(());
     }
 
-    let nonce = Nonce::from_slice(&connection_buff[10..22]);
-    let cipher = Aes128Gcm::new_from_slice(token.to_be_bytes().as_ref()).unwrap();
-    let decrypted_buff = cipher
-        .decrypt(nonce, &connection_buff[23..63])
-        .map_err(|_| anyhow!("Cant decrypt!"))?;
-
-    let decrypted_token = u128::from_be_bytes(decrypted_buff[0..16].try_into()?);
-    let timestamp = u64::from_be_bytes(decrypted_buff[16..24].try_into()?);
-
-    if token != decrypted_token {
-        println!("Token mismatch! {token} != {decrypted_token}");
-        return Ok(());
-    }
-
-    let current_time = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)?
-        .as_secs();
-
-    if current_time - timestamp > HELLO_PACKET_LIVE_TIME {
-        println!("Hello packet is too old!");
+    let res = ::utils::parse_hello_packet(token, &connection_buff, HELLO_PACKET_LIVE_TIME);
+    if let Err(e) = res {
+        println!("Hello packet error: {e:?}");
         return Ok(());
     }
 
@@ -166,28 +148,54 @@ async fn handle_client(mut stream: TcpStream, state: SharedProxyState, ssl: bool
         String::from_utf8_lossy(&host[5..]).trim().to_string()
     };
 
+    let tunn = get_tunn_or_error(&state, &host, &mut stream, ssl).await?;
+    tunn.0.send(u8::from(ssl)).await?;
+    let mut tunnel = tunn.2.recv().await?;
+
+    tokio::io::copy_bidirectional(&mut stream, &mut tunnel).await?;
+    Ok(())
+}
+
+async fn get_tunn_or_error(
+    state: &SharedProxyState,
+    host: &str,
+    stream: &mut TcpStream,
+    ssl: bool,
+) -> Result<TunnelEntry> {
+    if ssl {
+        let mut stream = state.get_tls_acceptor().await.accept(stream).await?;
+        get_tunn_or_error_inner(state, host, &mut stream).await
+    } else {
+        get_tunn_or_error_inner(state, host, stream).await
+    }
+}
+
+async fn get_tunn_or_error_inner<T>(
+    state: &SharedProxyState,
+    host: &str,
+    stream: &mut T,
+) -> Result<TunnelEntry>
+where
+    T: AsyncReadExt + AsyncWriteExt + Unpin,
+{
     let tunn = match get_tunn(&state, &host).await {
         Ok(tunn) => tunn,
         Err(TunnelError::TunnelDoesNotExist) => {
-            _ = crate::utils::write_raw_http_resp(
-                &mut stream,
+            _ = ::utils::http::write_raw_http_resp(
+                stream,
                 404,
                 "NOT FOUND",
                 "That tunnel does not exists!",
-                ssl,
-                &state,
             )
             .await;
             anyhow::bail!("Tunnel does not exist!");
         }
         Err(TunnelError::NoConnectorForTunnel) => {
-            _ = crate::utils::write_raw_http_resp(
-                &mut stream,
+            _ = ::utils::http::write_raw_http_resp(
+                stream,
                 404,
                 "NOT FOUND",
                 "Connector for this tunnel isn't connected!",
-                ssl,
-                &state,
             )
             .await;
             anyhow::bail!("No connector for tunnel!");
@@ -197,11 +205,7 @@ async fn handle_client(mut stream: TcpStream, state: SharedProxyState, ssl: bool
         }
     };
 
-    tunn.0.send(u8::from(ssl)).await?;
-    let mut tunnel = tunn.2.recv().await?;
-
-    tokio::io::copy_bidirectional(&mut stream, &mut tunnel).await?;
-    Ok(())
+    Ok(tunn)
 }
 
 async fn get_tunn(state: &SharedProxyState, host: &str) -> Result<TunnelEntry, TunnelError> {

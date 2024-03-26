@@ -6,9 +6,8 @@ use tokio::{
     net::TcpStream,
 };
 use tokio_rustls::TlsAcceptor;
-use utils::generate_hello_packet;
 
-mod cert;
+mod acme;
 mod utils;
 
 #[derive(Parser, Debug, Clone)]
@@ -44,7 +43,7 @@ async fn main() -> Result<()> {
     _ = dotenvy::dotenv();
     let args = Args::parse();
 
-    let (key, crt) = cert::cert_loader(
+    let (key, crt) = acme::cert_loader(
         args.token,
         args.hash,
         &args.proxy_addr,
@@ -53,8 +52,8 @@ async fn main() -> Result<()> {
     )
     .await?;
 
-    let certs = cert::load_certs(Path::new(&crt))?;
-    let privkey = cert::load_keys(Path::new(&key))?;
+    let certs = ::utils::certs::load_certs(Path::new(&crt))?;
+    let privkey = ::utils::certs::load_keys(Path::new(&key))?;
     let config = tokio_rustls::rustls::ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(certs, privkey)?;
@@ -64,7 +63,7 @@ async fn main() -> Result<()> {
     let domain = utils::get_domain_by_hash(args.hash, args.proxy_addr.to_string()).await?;
 
     let mut connector = TcpStream::connect(&args.proxy_addr).await?;
-    let hello_packet = generate_hello_packet(0, &args.token, &args.hash);
+    let hello_packet = ::utils::generate_hello_packet(0, &args.token, &args.hash)?;
 
     connector.write_all(&hello_packet).await?;
 
@@ -81,7 +80,7 @@ async fn main() -> Result<()> {
         };
         */
 
-        let conn_buff = generate_hello_packet(1, &args.token, &args.hash);
+        let conn_buff = ::utils::generate_hello_packet(1, &args.token, &args.hash)?;
         tokio::task::spawn(spawn_tunnel(
             conn_buff,
             args.nossl.to_string(),
@@ -128,7 +127,7 @@ async fn spawn_tunnel(
 
         let parts = parts.trim().split(" ").collect::<Vec<&str>>();
         let path = parts[1];
-        let redirect = utils::construct_http_redirect(&format!("https://{domain}{path}"));
+        let redirect = ::utils::http::construct_http_redirect(&format!("https://{domain}{path}"));
         tunnel_stream.write_all(redirect.as_bytes()).await?;
     } else {
         tokio::io::copy_bidirectional(&mut local_stream, &mut tunnel_stream).await?;

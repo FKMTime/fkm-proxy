@@ -30,7 +30,6 @@ async fn main() -> Result<()> {
     let acceptor = TlsAcceptor::from(Arc::new(config));
     let shared_proxy_state = SharedProxyState::new(acceptor);
 
-    /*
     shared_proxy_state
         .insert_client("test2.fkm.filipton.space", 0x6942069420)
         .await;
@@ -50,8 +49,6 @@ async fn main() -> Result<()> {
     shared_proxy_state
         .insert_client("t2.fkm.filipton.space", 987654321)
         .await;
-    */
-    shared_proxy_state.insert_client("localhost", 69420).await;
 
     shared_proxy_state
         .insert_client("test.fkm.filipton.space", 69420)

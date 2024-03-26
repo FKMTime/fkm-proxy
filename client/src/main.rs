@@ -19,8 +19,8 @@ struct Args {
     #[arg(short, long, default_value = "v1.filipton.space:6969", env = "PROXY")]
     proxy_addr: String,
 
-    #[arg(short, long, default_value = "127.0.0.1:80", env = "LOCAL_NOSSL")]
-    nossl: String,
+    #[arg(short, long, default_value = "127.0.0.1:80", env = "LOCAL_ADDR")]
+    addr: String,
 
     /*
     For now its not supported
@@ -39,6 +39,9 @@ struct Args {
 
     #[arg(short, long, action, env = "REDIRECT_SSL")]
     redirect_ssl: bool,
+
+    #[arg(short, long, env = "CERT_PATH")]
+    cert_path: Option<String>,
 }
 
 #[tokio::main]
@@ -57,12 +60,15 @@ async fn main() -> Result<()> {
     .await?;
     */
 
-    let domain = utils::get_domain_by_hash(args.hash, args.proxy_addr.to_string()).await?;
+    let domain = utils::get_domain_by_hash(args.hash, args.proxy_addr.to_string())
+        .await?
+        .trim();
 
+    let path = args.cert_path.unwrap_or_else(|| format!("/tmp/acme"));
     let mut acme = AcmeConfig::new([&domain])
         .contact_push(format!("mailto:{}", args.email))
-        .cache(DirCache::new("/tmp/acme"))
-        .directory_lets_encrypt(true)
+        .cache(DirCache::new(path))
+        .directory_lets_encrypt(false)
         .state();
 
     let rustls_config = Arc::new(
@@ -83,6 +89,7 @@ async fn main() -> Result<()> {
         }
     });
 
+    println!("Access through: http://{}", domain);
     let mut connector = TcpStream::connect(&args.proxy_addr).await?;
     let hello_packet = ::utils::generate_hello_packet(0, &args.token, &args.hash)?;
 
@@ -104,7 +111,7 @@ async fn main() -> Result<()> {
         let conn_buff = ::utils::generate_hello_packet(1, &args.token, &args.hash)?;
         tokio::task::spawn(spawn_tunnel(
             conn_buff,
-            args.nossl.to_string(),
+            args.addr.to_string(),
             args.proxy_addr.to_string(),
             ssl,
             args.redirect_ssl,

@@ -162,40 +162,28 @@ async fn get_tunn_or_error(
     stream: &mut TcpStream,
     ssl: bool,
 ) -> Result<TunnelEntry> {
-    if ssl {
-        let mut stream = state.get_tls_acceptor().await.accept(stream).await?;
-        get_tunn_or_error_inner(state, host, &mut stream).await
-    } else {
-        get_tunn_or_error_inner(state, host, stream).await
-    }
-}
-
-async fn get_tunn_or_error_inner<T>(
-    state: &SharedProxyState,
-    host: &str,
-    stream: &mut T,
-) -> Result<TunnelEntry>
-where
-    T: AsyncReadExt + AsyncWriteExt + Unpin,
-{
     let tunn = match get_tunn(&state, &host).await {
         Ok(tunn) => tunn,
         Err(TunnelError::TunnelDoesNotExist) => {
-            _ = ::utils::http::write_raw_http_resp(
+            _ = write_raw_http_resp(
                 stream,
                 404,
                 "NOT FOUND",
                 "That tunnel does not exists!",
+                ssl,
+                state,
             )
             .await;
             anyhow::bail!("Tunnel does not exist!");
         }
         Err(TunnelError::NoConnectorForTunnel) => {
-            _ = ::utils::http::write_raw_http_resp(
+            _ = write_raw_http_resp(
                 stream,
                 404,
                 "NOT FOUND",
                 "Connector for this tunnel isn't connected!",
+                ssl,
+                state,
             )
             .await;
             anyhow::bail!("No connector for tunnel!");
@@ -206,6 +194,26 @@ where
     };
 
     Ok(tunn)
+}
+
+async fn write_raw_http_resp(
+    stream: &mut TcpStream,
+    status_code: u16,
+    status_text: &str,
+    body: &str,
+    ssl: bool,
+    state: &SharedProxyState,
+) -> Result<()> {
+    let resp = ::utils::http::construct_http_resp(status_code, status_text, body);
+    if ssl {
+        let acceptor = state.get_tls_acceptor().await;
+        let mut stream = acceptor.accept(stream).await?;
+        stream.write_all(resp.as_bytes()).await?;
+    } else {
+        stream.write_all(resp.as_bytes()).await?;
+    }
+
+    Ok(())
 }
 
 async fn get_tunn(state: &SharedProxyState, host: &str) -> Result<TunnelEntry, TunnelError> {

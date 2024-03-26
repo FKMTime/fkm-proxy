@@ -62,13 +62,14 @@ async fn main() -> Result<()> {
 
     let domain = utils::get_domain_by_hash(args.hash, args.proxy_addr.to_string())
         .await?
-        .trim();
+        .trim()
+        .to_string();
 
     let path = args.cert_path.unwrap_or_else(|| format!("/tmp/acme"));
     let mut acme = AcmeConfig::new([&domain])
         .contact_push(format!("mailto:{}", args.email))
         .cache(DirCache::new(path))
-        .directory_lets_encrypt(false)
+        .directory_lets_encrypt(true)
         .state();
 
     let rustls_config = Arc::new(

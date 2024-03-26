@@ -3,7 +3,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 pub async fn write_raw_http_resp<T>(
     stream: &mut T,
-    status: u32,
+    status: u16,
     status_str: &str,
     content: &str,
 ) -> Result<()>
@@ -15,7 +15,7 @@ where
     Ok(())
 }
 
-pub fn construct_http_resp(status: u32, status_str: &str, content: &str) -> String {
+pub fn construct_http_resp(status: u16, status_str: &str, content: &str) -> String {
     format!(
         "HTTP/1.1 {status} {status_str}\r\n\
         Content-Length: {content_len}\r\n\

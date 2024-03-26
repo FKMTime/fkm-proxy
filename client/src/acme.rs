@@ -1,3 +1,4 @@
+/*
 use acme_lib::{persist::FilePersist, Directory, DirectoryUrl};
 use anyhow::Result;
 use std::path::Path;
@@ -148,3 +149,4 @@ fn get_crt_key(cert_path: &Path) -> Result<(String, String)> {
 
     Err(anyhow::anyhow!("Certificate not found"))
 }
+*/

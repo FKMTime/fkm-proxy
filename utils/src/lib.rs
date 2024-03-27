@@ -83,7 +83,7 @@ where
     let n = stream.read(in_buffer).await?;
     let mut lines = in_buffer[..n].split(|&x| x == b'\n');
     let host = lines
-        .find(|x| x.starts_with(b"Host:"))
+        .find(|x| x.to_ascii_lowercase().starts_with(b"host:"))
         .ok_or_else(|| anyhow::anyhow!("No host"))?;
 
     let host = String::from_utf8_lossy(&host[5..]).trim().to_string();

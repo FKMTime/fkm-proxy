@@ -3,7 +3,7 @@ use kanal::{AsyncReceiver, AsyncSender};
 use std::{collections::HashMap, sync::Arc};
 use thiserror::Error;
 use tokio::{net::TcpStream, sync::RwLock};
-use tokio_rustls::{client::TlsStream, TlsAcceptor};
+use tokio_rustls::{client::TlsStream, TlsAcceptor, TlsConnector};
 
 pub type TunnelEntry = (
     AsyncSender<u8>,
@@ -12,7 +12,8 @@ pub type TunnelEntry = (
 );
 
 pub struct ProxyState {
-    pub tls_acceptor: TlsAcceptor,
+    pub tls_acceptor: Arc<TlsAcceptor>,
+    pub tls_connector: Arc<TlsConnector>,
 
     pub tunnels: HashMap<u128, TunnelEntry>,
     pub tokens: HashMap<u64, u128>,    // url(hashed) -> token
@@ -23,9 +24,10 @@ pub struct ProxyState {
 pub struct SharedProxyState(Arc<RwLock<ProxyState>>);
 
 impl SharedProxyState {
-    pub fn new(ssl_acceptor: TlsAcceptor) -> Self {
+    pub fn new(tls_acceptor: TlsAcceptor, tls_connector: TlsConnector) -> Self {
         SharedProxyState(Arc::new(RwLock::new(ProxyState {
-            tls_acceptor: ssl_acceptor,
+            tls_acceptor: Arc::new(tls_acceptor),
+            tls_connector: Arc::new(tls_connector),
 
             tunnels: HashMap::new(),
             tokens: HashMap::new(),
@@ -77,9 +79,14 @@ impl SharedProxyState {
         state.tunnels.remove(&token);
     }
 
-    pub async fn get_tls_acceptor(&self) -> TlsAcceptor {
+    pub async fn get_tls_acceptor(&self) -> Arc<TlsAcceptor> {
         let state = self.0.read().await;
         state.tls_acceptor.clone()
+    }
+
+    pub async fn get_tls_connector(&self) -> Arc<TlsConnector> {
+        let state = self.0.read().await;
+        state.tls_connector.clone()
     }
 
     pub async fn get_domain_by_hash(&self, hash: u64) -> Option<String> {

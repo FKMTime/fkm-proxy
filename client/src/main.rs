@@ -15,12 +15,6 @@ struct Args {
     #[arg(short, long, default_value = "127.0.0.1:80", env = "LOCAL_ADDR")]
     addr: String,
 
-    /*
-    For now its not supported
-
-    #[arg(short, long, default_value = "127.0.0.1:443", env = "LOCAL_SSL")]
-    ssl: String,
-    */
     #[arg(long, env = "HASH")]
     hash: u64,
 
@@ -37,7 +31,6 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     let cert = rcgen::generate_simple_self_signed(vec!["proxy.lan".to_string()])?;
-    println!("params: {:?}", cert.get_params().alg);
     let crt = ::utils::certs::cert_from_str(&cert.serialize_pem()?)?;
     let key = ::utils::certs::key_from_str(&cert.serialize_private_key_pem())?;
 
@@ -56,19 +49,22 @@ async fn main() -> Result<()> {
     println!("Access through: http://{}", domain);
 
     hello_packet[0] = 0x01; // 0x01 - tunnel
-    loop {
-        // TODO: make this as normal read, then iterate over res (n) times
-        _ = stream.read_u8().await?;
-        //let ssl = res == 0x01;
 
-        tokio::task::spawn(spawn_tunnel(
-            hello_packet,
-            args.addr.to_string(),
-            args.proxy_addr.to_string(),
-            args.redirect_ssl,
-            domain.to_string(),
-            acceptor.clone(),
-        ));
+    let mut void = [0u8; 1000];
+    loop {
+        let n = stream.read(&mut void).await?;
+        for i in 0..n {
+            let ssl = void[i] == 0x01;
+
+            tokio::task::spawn(spawn_tunnel(
+                hello_packet,
+                args.addr.to_string(),
+                args.proxy_addr.to_string(),
+                args.redirect_ssl && !ssl,
+                domain.to_string(),
+                acceptor.clone(),
+            ));
+        }
     }
 
     // Ok(())
@@ -78,7 +74,7 @@ async fn spawn_tunnel(
     hello_packet: [u8; 80],
     local_addr: String,
     proxy_addr: String,
-    redirect_ssl: bool,
+    redirect_to_ssl: bool,
     domain: String,
     acceptor: Arc<tokio_rustls::TlsAcceptor>,
 ) -> Result<()> {
@@ -90,7 +86,7 @@ async fn spawn_tunnel(
     let mut local_stream = TcpStream::connect(local_addr).await?;
     local_stream.set_nodelay(true)?;
 
-    if redirect_ssl {
+    if redirect_to_ssl {
         let mut buffer = [0u8; 1];
         let mut parts = String::new();
         loop {

@@ -1,18 +1,11 @@
-use std::sync::Arc;
-
-use crate::{
-    cert::NoCertVerification,
-    structs::{SharedProxyState, TunnelEntry, TunnelError},
-};
+use crate::structs::{SharedProxyState, TunnelEntry, TunnelError};
 use anyhow::{anyhow, Result};
+use std::sync::Arc;
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
-use tokio_rustls::{
-    rustls::{pki_types, server::Acceptor},
-    TlsConnector,
-};
+use tokio_rustls::{rustls::pki_types, server::TlsStream, TlsAcceptor, TlsConnector};
 
 pub async fn spawn_tunnel_connector(
     remote_addrs: Vec<(&str, bool)>,
@@ -38,26 +31,12 @@ pub async fn spawn_tunnel_connector(
 async fn connector_listener(addr: String, state: SharedProxyState) -> Result<()> {
     println!("Connector listening on: {addr}");
     let listener = TcpListener::bind(addr).await?;
-
-    let config = tokio_rustls::rustls::ClientConfig::builder()
-        .dangerous()
-        .with_custom_certificate_verifier(Arc::new(NoCertVerification))
-        .with_no_client_auth();
-
-    let connector = Arc::new(TlsConnector::from(Arc::new(config)));
+    let connector = state.get_tls_connector().await;
 
     loop {
         let (stream, _) = listener.accept().await?;
         stream.set_nodelay(true)?;
-
-        let state = state.clone();
-        let connector = connector.clone();
-        tokio::task::spawn(async move {
-            let res = connector_handler(stream, state, connector).await;
-            if let Err(e) = res {
-                println!("Connector handler error: {e:?}");
-            }
-        });
+        tokio::task::spawn(connector_handler(stream, state.clone(), connector.clone()));
     }
 }
 
@@ -136,77 +115,86 @@ async fn connector_handler(
 async fn remote_listener(addr: String, state: SharedProxyState, ssl: bool) -> Result<()> {
     println!("Remote listening on: {addr} (SSL: {ssl})");
     let listener = TcpListener::bind(addr).await?;
+    let acceptor = state.get_tls_acceptor().await;
+
     loop {
         let (stream, _) = listener.accept().await?;
         stream.set_nodelay(true)?;
-        tokio::task::spawn(handle_client(stream, state.clone(), ssl));
+        tokio::task::spawn(handle_client(stream, state.clone(), ssl, acceptor.clone()));
     }
 }
 
-async fn handle_client(mut stream: TcpStream, state: SharedProxyState, ssl: bool) -> Result<()> {
+async fn handle_client(
+    stream: TcpStream,
+    state: SharedProxyState,
+    ssl: bool,
+    acceptor: Arc<TlsAcceptor>,
+) -> Result<()> {
+    if ssl {
+        let stream = acceptor.accept(stream).await?;
+        handle_client_ssl(stream, state).await?;
+    } else {
+        handle_client_no_ssl(stream, state).await?;
+    }
+
+    Ok(())
+}
+
+async fn handle_client_ssl(
+    mut stream: TlsStream<TcpStream>,
+    state: SharedProxyState,
+) -> Result<()> {
     let mut in_buffer = [0; 8192];
 
-    let n = stream.peek(&mut in_buffer).await?;
-
-    let host = if ssl {
-        let mut n_buf = &in_buffer[..n];
-        let mut acceptor = Acceptor::default();
-        _ = acceptor.read_tls(&mut n_buf);
-        let accepted = acceptor
-            .accept()
-            .map_err(|e| anyhow::anyhow!(format!("{e:?}")))?
-            .ok_or_else(|| anyhow::anyhow!("No tls message"))?;
-
-        accepted
-            .client_hello()
-            .server_name()
-            .ok_or_else(|| anyhow::anyhow!("No server name"))?
-            .to_string()
-    } else {
-        let mut lines = in_buffer[..n].split(|&x| x == b'\n');
-        let host = lines
-            .find(|x| x.starts_with(b"Host:"))
-            .ok_or_else(|| anyhow::anyhow!("No host"))?;
-
-        String::from_utf8_lossy(&host[5..]).trim().to_string()
-    };
-
-    let (tunn, _) = get_tunn_or_error(&state, &host, &mut stream, ssl).await?;
-    tunn.0.send(u8::from(ssl)).await?;
+    let (host, n) = ::utils::read_http_host(&mut stream, &mut in_buffer).await?;
+    let (tunn, _) = get_tunn_or_error(&state, &host, &mut stream).await?;
+    tunn.0.send(u8::from(true)).await?;
     let mut tunnel = tunn.2.recv().await?;
 
+    tunnel.write_all(&in_buffer[..n]).await?; // relay the first packet
     tokio::io::copy_bidirectional(&mut stream, &mut tunnel).await?;
     Ok(())
 }
 
-async fn get_tunn_or_error(
+async fn handle_client_no_ssl(mut stream: TcpStream, state: SharedProxyState) -> Result<()> {
+    let mut in_buffer = [0; 8192];
+
+    let (host, n) = ::utils::read_http_host(&mut stream, &mut in_buffer).await?;
+    let (tunn, _) = get_tunn_or_error(&state, &host, &mut stream).await?;
+    tunn.0.send(u8::from(false)).await?;
+    let mut tunnel = tunn.2.recv().await?;
+
+    tunnel.write_all(&in_buffer[..n]).await?; // relay the first packet
+    tokio::io::copy_bidirectional(&mut stream, &mut tunnel).await?;
+    Ok(())
+}
+
+async fn get_tunn_or_error<T>(
     state: &SharedProxyState,
     host: &str,
-    stream: &mut TcpStream,
-    ssl: bool,
-) -> Result<(TunnelEntry, u128)> {
+    stream: &mut T,
+) -> Result<(TunnelEntry, u128)>
+where
+    T: AsyncRead + AsyncWrite + Unpin,
+{
     let tunn = match get_tunn(&state, &host).await {
         Ok(tunn) => tunn,
         Err(TunnelError::TunnelDoesNotExist) => {
-            _ = write_raw_http_resp(
+            _ = ::utils::http::write_raw_http_resp(
                 stream,
                 404,
                 "NOT FOUND",
                 "That tunnel does not exists!",
-                ssl,
-                state,
             )
             .await;
             anyhow::bail!("Tunnel does not exist!");
         }
         Err(TunnelError::NoConnectorForTunnel) => {
-            _ = write_raw_http_resp(
+            _ = ::utils::http::write_raw_http_resp(
                 stream,
                 404,
                 "NOT FOUND",
                 "Connector for this tunnel isn't connected!",
-                ssl,
-                state,
             )
             .await;
             anyhow::bail!("No connector for tunnel!");
@@ -217,26 +205,6 @@ async fn get_tunn_or_error(
     };
 
     Ok(tunn)
-}
-
-async fn write_raw_http_resp(
-    stream: &mut TcpStream,
-    status_code: u16,
-    status_text: &str,
-    body: &str,
-    ssl: bool,
-    state: &SharedProxyState,
-) -> Result<()> {
-    let resp = ::utils::http::construct_http_resp(status_code, status_text, body);
-    if ssl {
-        let acceptor = state.get_tls_acceptor().await;
-        let mut stream = acceptor.accept(stream).await?;
-        stream.write_all(resp.as_bytes()).await?;
-    } else {
-        stream.write_all(resp.as_bytes()).await?;
-    }
-
-    Ok(())
 }
 
 async fn get_tunn(

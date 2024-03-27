@@ -1,7 +1,7 @@
-use crate::structs::SharedProxyState;
+use crate::{cert::NoCertVerification, structs::SharedProxyState};
 use anyhow::Result;
 use std::{path::Path, sync::Arc};
-use tokio_rustls::TlsAcceptor;
+use tokio_rustls::{TlsAcceptor, TlsConnector};
 
 mod cert;
 mod structs;
@@ -26,9 +26,15 @@ async fn main() -> Result<()> {
     let config = tokio_rustls::rustls::ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(certs, privkey)?;
-
     let acceptor = TlsAcceptor::from(Arc::new(config));
-    let shared_proxy_state = SharedProxyState::new(acceptor);
+
+    let config = tokio_rustls::rustls::ClientConfig::builder()
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(NoCertVerification))
+        .with_no_client_auth();
+    let connector = TlsConnector::from(Arc::new(config));
+
+    let shared_proxy_state = SharedProxyState::new(acceptor, connector);
 
     shared_proxy_state
         .insert_client("test2.fkm.filipton.space", 0x6942069420)

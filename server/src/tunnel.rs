@@ -1,12 +1,18 @@
-use crate::structs::{SharedProxyState, TunnelEntry, TunnelError};
+use std::sync::Arc;
+
+use crate::{
+    cert::NoCertVerification,
+    structs::{SharedProxyState, TunnelEntry, TunnelError},
+};
 use anyhow::{anyhow, Result};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
-use tokio_rustls::rustls::server::Acceptor;
-
-const HELLO_PACKET_LIVE_TIME: u64 = 5;
+use tokio_rustls::{
+    rustls::{pki_types, server::Acceptor},
+    TlsConnector,
+};
 
 pub async fn spawn_tunnel_connector(
     remote_addrs: Vec<(&str, bool)>,
@@ -33,14 +39,37 @@ async fn connector_listener(addr: String, state: SharedProxyState) -> Result<()>
     println!("Connector listening on: {addr}");
     let listener = TcpListener::bind(addr).await?;
 
+    let config = tokio_rustls::rustls::ClientConfig::builder()
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(NoCertVerification))
+        .with_no_client_auth();
+
+    let connector = Arc::new(TlsConnector::from(Arc::new(config)));
+
     loop {
         let (stream, _) = listener.accept().await?;
         stream.set_nodelay(true)?;
-        tokio::task::spawn(connector_handler(stream, state.clone()));
+
+        let state = state.clone();
+        let connector = connector.clone();
+        tokio::task::spawn(async move {
+            let res = connector_handler(stream, state, connector).await;
+            if let Err(e) = res {
+                println!("Connector handler error: {e:?}");
+            }
+        });
     }
 }
 
-async fn connector_handler(mut stream: TcpStream, state: SharedProxyState) -> Result<()> {
+async fn connector_handler(
+    stream: TcpStream,
+    state: SharedProxyState,
+    connector: Arc<TlsConnector>,
+) -> Result<()> {
+    let mut stream = connector
+        .connect(pki_types::ServerName::try_from("proxy.lan")?, stream)
+        .await?;
+
     let mut connection_buff = [0u8; 80];
     stream.read_exact(&mut connection_buff).await?;
 
@@ -50,18 +79,7 @@ async fn connector_handler(mut stream: TcpStream, state: SharedProxyState) -> Re
         .await
         .ok_or_else(|| anyhow!("Cant find token!"))?;
 
-    // get domain from hash
-    if connection_buff[0] == 2 {
-        let domain = state
-            .get_domain_by_hash(url_hash)
-            .await
-            .ok_or_else(|| anyhow!("Cant find domain!"))?;
-
-        stream.write_all(domain.as_bytes()).await?;
-        return Ok(());
-    }
-
-    let res = ::utils::parse_hello_packet(token, &connection_buff, HELLO_PACKET_LIVE_TIME);
+    let res = ::utils::parse_hello_packet(token, &connection_buff);
     if let Err(e) = res {
         println!("Hello packet error: {e:?}");
         return Ok(());
@@ -70,6 +88,11 @@ async fn connector_handler(mut stream: TcpStream, state: SharedProxyState) -> Re
     // im the connector!
     if connection_buff[0] == 0 {
         println!("Connector connected to url with hash: {url_hash}");
+        let domain = state
+            .get_domain_by_hash(url_hash)
+            .await
+            .ok_or_else(|| anyhow!("Cant find domain!"))?;
+        ::utils::send_string_to_stream(&mut stream, &domain).await?;
 
         let (tx, rx) = kanal::unbounded_async::<u8>();
         let (stream_tx, stream_rx) = kanal::unbounded_async();
@@ -148,15 +171,11 @@ async fn handle_client(mut stream: TcpStream, state: SharedProxyState, ssl: bool
         String::from_utf8_lossy(&host[5..]).trim().to_string()
     };
 
-    let (tunn, token) = get_tunn_or_error(&state, &host, &mut stream, ssl).await?;
+    let (tunn, _) = get_tunn_or_error(&state, &host, &mut stream, ssl).await?;
     tunn.0.send(u8::from(ssl)).await?;
     let mut tunnel = tunn.2.recv().await?;
 
-    if ssl {
-        tokio::io::copy_bidirectional(&mut stream, &mut tunnel).await?;
-    } else {
-        ::utils::encryption::copy_bidirectional_enc(&mut tunnel, &mut stream, token).await?;
-    }
+    tokio::io::copy_bidirectional(&mut stream, &mut tunnel).await?;
     Ok(())
 }
 
@@ -220,7 +239,10 @@ async fn write_raw_http_resp(
     Ok(())
 }
 
-async fn get_tunn(state: &SharedProxyState, host: &str) -> Result<(TunnelEntry, u128), TunnelError> {
+async fn get_tunn(
+    state: &SharedProxyState,
+    host: &str,
+) -> Result<(TunnelEntry, u128), TunnelError> {
     let token = state
         .get_client_token(&host)
         .await

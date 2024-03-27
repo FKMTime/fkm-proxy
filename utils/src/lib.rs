@@ -1,13 +1,8 @@
-use aes_gcm::{
-    aead::{Aead, OsRng},
-    AeadCore, Aes128Gcm, KeyInit, Nonce,
-};
-use anyhow::{anyhow, Result};
-use std::time::{SystemTime, UNIX_EPOCH};
+use anyhow::Result;
 use thiserror::Error;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 pub mod certs;
-pub mod encryption;
 pub mod http;
 
 pub fn generate_hello_packet(
@@ -18,54 +13,55 @@ pub fn generate_hello_packet(
     let mut conn_buff = [0u8; 80];
     conn_buff[0] = connector_type;
     conn_buff[1..9].copy_from_slice(&hash.to_be_bytes());
+    conn_buff[10..26].copy_from_slice(&token.to_be_bytes());
 
-    let cipher = Aes128Gcm::new_from_slice(token.to_be_bytes().as_ref())
-        .map_err(|_| anyhow!("Invalid token length"))?;
-
-    let nonce = Aes128Gcm::generate_nonce(&mut OsRng); // 12 bytes
-    conn_buff[10..22].copy_from_slice(nonce.as_slice());
-
-    let generated_at = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-
-    let mut auth_bytes = [0u8; 24]; // KEY(16B) + TIMESTAMP(8B)
-    auth_bytes[..16].copy_from_slice(token.to_be_bytes().as_ref());
-    auth_bytes[16..24].copy_from_slice(&generated_at.to_be_bytes());
-
-    let encrypted = cipher
-        .encrypt(&nonce, auth_bytes.as_ref())
-        .map_err(|_| HelloPacketError::EncryptionError)?; // 40 bytes
-
-    conn_buff[23..63].copy_from_slice(encrypted.as_ref());
     Ok(conn_buff)
 }
 
-pub fn parse_hello_packet(
-    token: u128,
-    connection_buff: &[u8; 80],
-    hello_packet_ttl: u64,
-) -> Result<(), HelloPacketError> {
-    let nonce = Nonce::from_slice(&connection_buff[10..22]);
-    let cipher = Aes128Gcm::new_from_slice(token.to_be_bytes().as_ref()).unwrap();
-    let decrypted_buff = cipher
-        .decrypt(nonce, &connection_buff[23..63])
-        .map_err(|_| anyhow!("Cant decrypt!"))?;
+pub fn parse_hello_packet(token: u128, connection_buff: &[u8; 80]) -> Result<(), HelloPacketError> {
+    //let parsed_connector_type = connection_buff[0];
+    //let parsed_hash = u64::from_be_bytes(connection_buff[1..9].try_into()?);
+    let parsed_token = u128::from_be_bytes(connection_buff[10..26].try_into()?);
 
-    let decrypted_token = u128::from_be_bytes(decrypted_buff[0..16].try_into()?);
-    let timestamp = u64::from_be_bytes(decrypted_buff[16..24].try_into()?);
-
-    if token != decrypted_token {
+    if parsed_token != token {
         return Err(HelloPacketError::TokenMismatch);
     }
 
-    let current_time = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)?
-        .as_secs();
+    Ok(())
+}
 
-    if current_time - timestamp > hello_packet_ttl {
-        return Err(HelloPacketError::HelloPacketIsTooOld);
-    }
+pub fn generate_string_packet(string: &str) -> Result<Vec<u8>> {
+    let mut bytes = string.as_bytes().to_vec();
+    bytes.push(0); // null terminator
+
+    Ok(bytes)
+}
+
+pub async fn send_string_to_stream<T>(stream: &mut T, string: &str) -> Result<()>
+where
+    T: AsyncWrite + Unpin,
+{
+    let bytes = generate_string_packet(string)?;
+    stream.write_all(&bytes).await?;
 
     Ok(())
+}
+
+pub async fn read_string_from_stream<T>(stream: &mut T) -> Result<String>
+where
+    T: AsyncRead + Unpin,
+{
+    let mut buffer = Vec::new();
+    loop {
+        let byte = stream.read_u8().await?;
+        if byte == 0 {
+            break;
+        }
+
+        buffer.push(byte);
+    }
+
+    Ok(String::from_utf8(buffer)?)
 }
 
 #[derive(Error, Debug)]
@@ -73,17 +69,8 @@ pub enum HelloPacketError {
     #[error("Token mismatch!")]
     TokenMismatch,
 
-    #[error("Hello packet is too old!")]
-    HelloPacketIsTooOld,
-
-    #[error("Encryption error!")]
-    EncryptionError,
-
     #[error(transparent)]
     TryFromSlice(#[from] std::array::TryFromSliceError),
-
-    #[error(transparent)]
-    SystemTime(#[from] std::time::SystemTimeError),
 
     #[error(transparent)]
     Anyhow(#[from] anyhow::Error),

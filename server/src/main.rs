@@ -1,9 +1,9 @@
-use std::{path::Path, sync::Arc};
-
 use crate::structs::SharedProxyState;
 use anyhow::Result;
+use std::{path::Path, sync::Arc};
 use tokio_rustls::TlsAcceptor;
 
+mod cert;
 mod structs;
 mod tunnel;
 

@@ -3,12 +3,12 @@ use kanal::{AsyncReceiver, AsyncSender};
 use std::{collections::HashMap, sync::Arc};
 use thiserror::Error;
 use tokio::{net::TcpStream, sync::RwLock};
-use tokio_rustls::TlsAcceptor;
+use tokio_rustls::{client::TlsStream, TlsAcceptor};
 
 pub type TunnelEntry = (
     AsyncSender<u8>,
-    AsyncSender<TcpStream>,
-    AsyncReceiver<TcpStream>,
+    AsyncSender<TlsStream<TcpStream>>,
+    AsyncReceiver<TlsStream<TcpStream>>,
 );
 
 pub struct ProxyState {
@@ -67,7 +67,7 @@ impl SharedProxyState {
         state.tunnels.get(&token).cloned()
     }
 
-    pub async fn get_tunnel_tx(&self, token: u128) -> Option<AsyncSender<TcpStream>> {
+    pub async fn get_tunnel_tx(&self, token: u128) -> Option<AsyncSender<TlsStream<TcpStream>>> {
         let state = self.0.read().await;
         state.tunnels.get(&token).map(|x| x.1.clone())
     }

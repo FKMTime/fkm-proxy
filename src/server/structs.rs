@@ -38,7 +38,7 @@ impl SharedProxyState {
     pub async fn insert_client(&self, url: &str, token: u128) {
         let mut state = self.0.write().await;
         let hash = HighwayHasher::default().hash64(url.as_bytes());
-        println!("New url: {url} with hash: {hash}");
+        tracing::info!("New url: {url} with hash: {hash}");
 
         state.domains.insert(hash, url.to_string());
         state.tokens.insert(hash, token);

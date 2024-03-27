@@ -34,6 +34,7 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<()> {
     _ = dotenvy::dotenv();
+    tracing_subscriber::fmt::init();
     let args = Args::parse();
 
     let cert = rcgen::generate_simple_self_signed(vec!["proxy.lan".to_string()])?;
@@ -52,7 +53,7 @@ async fn main() -> Result<()> {
 
     stream.write_all(&hello_packet).await?;
     let domain = read_string_from_stream(&mut stream).await?;
-    println!("Access through: http://{}", domain);
+    tracing::info!("Access through: http://{}", domain);
 
     hello_packet[0] = 0x01; // 0x01 - tunnel
 
@@ -62,14 +63,27 @@ async fn main() -> Result<()> {
         for i in 0..n {
             let ssl = void[i] == 0x01;
 
-            tokio::task::spawn(spawn_tunnel(
-                hello_packet,
-                args.addr.to_string(),
-                args.proxy_addr.to_string(),
-                args.redirect_ssl && !ssl,
-                domain.to_string(),
-                acceptor.clone(),
-            ));
+            let addr = args.addr.to_string();
+            let proxy_addr = args.proxy_addr.to_string();
+            let redirect_to_ssl = args.redirect_ssl && !ssl;
+            let domain = domain.to_string();
+            let acceptor = acceptor.clone();
+
+            tokio::task::spawn(async move {
+                let res = spawn_tunnel(
+                    hello_packet,
+                    addr,
+                    proxy_addr,
+                    redirect_to_ssl,
+                    domain,
+                    acceptor,
+                )
+                .await;
+
+                if let Err(e) = res {
+                    tracing::error!("Tunnel Error: {e}");
+                }
+            });
         }
     }
 

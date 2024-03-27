@@ -9,6 +9,8 @@ mod tunnel;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    tracing_subscriber::fmt::init();
+
     let addrs = std::env::args()
         .nth(1)
         .unwrap_or("0.0.0.0:1337".to_string());
@@ -65,10 +67,10 @@ async fn main() -> Result<()> {
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     tokio::select! {
         _ = sigterm.recv() => {
-            println!("Received SIGTERM, stopping server!");
+            tracing::info!("Received SIGTERM, stopping server!");
         }
         _ = tokio::signal::ctrl_c() => {
-            println!("Received SIGINT, stopping server!");
+            tracing::info!("Received SIGINT, stopping server!");
         }
     }
     Ok(())

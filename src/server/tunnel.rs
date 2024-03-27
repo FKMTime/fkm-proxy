@@ -29,14 +29,22 @@ pub async fn spawn_tunnel_connector(
 }
 
 async fn connector_listener(addr: String, state: SharedProxyState) -> Result<()> {
-    println!("Connector listening on: {addr}");
+    tracing::info!("Connector listening on: {addr}");
     let listener = TcpListener::bind(addr).await?;
     let connector = state.get_tls_connector().await;
 
     loop {
         let (stream, _) = listener.accept().await?;
         stream.set_nodelay(true)?;
-        tokio::task::spawn(connector_handler(stream, state.clone(), connector.clone()));
+
+        let state = state.clone();
+        let connector = connector.clone();
+        tokio::task::spawn(async move {
+            let res = connector_handler(stream, state, connector).await;
+            if let Err(e) = res {
+                tracing::error!("Connector error: {e}");
+            }
+        });
     }
 }
 
@@ -60,13 +68,12 @@ async fn connector_handler(
 
     let res = ::utils::parse_hello_packet(token, &connection_buff);
     if let Err(e) = res {
-        println!("Hello packet error: {e:?}");
-        return Ok(());
+        return Err(e.into());
     }
 
     // im the connector!
     if connection_buff[0] == 0 {
-        println!("Connector connected to url with hash: {url_hash}");
+        tracing::info!("Connector connected to url with hash: {url_hash}");
         let domain = state
             .get_domain_by_hash(url_hash)
             .await
@@ -113,14 +120,22 @@ async fn connector_handler(
 }
 
 async fn remote_listener(addr: String, state: SharedProxyState, ssl: bool) -> Result<()> {
-    println!("Remote listening on: {addr} (SSL: {ssl})");
+    tracing::info!("Remote listening on: {addr} (SSL: {ssl})");
     let listener = TcpListener::bind(addr).await?;
     let acceptor = state.get_tls_acceptor().await;
 
     loop {
         let (stream, _) = listener.accept().await?;
         stream.set_nodelay(true)?;
-        tokio::task::spawn(handle_client(stream, state.clone(), ssl, acceptor.clone()));
+
+        let state = state.clone();
+        let acceptor = acceptor.clone();
+        tokio::task::spawn(async move {
+            let res = handle_client(stream, state, ssl, acceptor).await;
+            if let Err(e) = res {
+                tracing::error!("Handle client error: {e}");
+            }
+        });
     }
 }
 

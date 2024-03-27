@@ -5,7 +5,7 @@ use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
-use tokio_rustls::{rustls::pki_types, server::TlsStream, TlsAcceptor, TlsConnector};
+use tokio_rustls::{rustls::pki_types, TlsAcceptor, TlsConnector};
 
 pub async fn spawn_tunnel_connector(
     remote_addrs: Vec<(&str, bool)>,
@@ -147,40 +147,28 @@ async fn handle_client(
 ) -> Result<()> {
     if ssl {
         let stream = acceptor.accept(stream).await?;
-        handle_client_ssl(stream, state).await?;
+        handle_client_inner(stream, state, true).await?;
     } else {
-        handle_client_no_ssl(stream, state).await?;
+        handle_client_inner(stream, state, false).await?;
     }
 
     Ok(())
 }
 
-async fn handle_client_ssl(
-    mut stream: TlsStream<TcpStream>,
-    state: SharedProxyState,
-) -> Result<()> {
+async fn handle_client_inner<T>(mut stream: T, state: SharedProxyState, ssl: bool) -> Result<()>
+where
+    T: AsyncRead + AsyncWrite + Unpin,
+{
     let mut in_buffer = [0; 8192];
 
     let (host, n) = ::utils::read_http_host(&mut stream, &mut in_buffer).await?;
-    let (tunn, _) = get_tunn_or_error(&state, &host, &mut stream).await?;
-    tunn.0.send(u8::from(true)).await?;
-    let mut tunnel = tunn.2.recv().await?;
+    if let Ok((tunn, _)) = get_tunn_or_error(&state, &host, &mut stream).await {
+        tunn.0.send(u8::from(ssl)).await?;
+        let mut tunnel = tunn.2.recv().await?;
 
-    tunnel.write_all(&in_buffer[..n]).await?; // relay the first packet
-    tokio::io::copy_bidirectional(&mut stream, &mut tunnel).await?;
-    Ok(())
-}
-
-async fn handle_client_no_ssl(mut stream: TcpStream, state: SharedProxyState) -> Result<()> {
-    let mut in_buffer = [0; 8192];
-
-    let (host, n) = ::utils::read_http_host(&mut stream, &mut in_buffer).await?;
-    let (tunn, _) = get_tunn_or_error(&state, &host, &mut stream).await?;
-    tunn.0.send(u8::from(false)).await?;
-    let mut tunnel = tunn.2.recv().await?;
-
-    tunnel.write_all(&in_buffer[..n]).await?; // relay the first packet
-    tokio::io::copy_bidirectional(&mut stream, &mut tunnel).await?;
+        tunnel.write_all(&in_buffer[..n]).await?; // relay the first packet
+        tokio::io::copy_bidirectional(&mut stream, &mut tunnel).await?;
+    }
     Ok(())
 }
 

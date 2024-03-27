@@ -11,7 +11,7 @@ clap = { version = "4.5.3", features = ["derive", "env"] }
 dotenvy = "0.15.7"
 rcgen = "0.12.1"
 tokio = { version = "1.36.0", features = ["full"] }
-tokio-rustls = "0.26.0"
+tokio-rustls = { version = "0.26.0", features = ["logging", "tls12"], default-features = false }
 utils = { path = "../utils" }
 
 [profile.release]

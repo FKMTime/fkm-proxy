@@ -167,7 +167,9 @@ where
         let mut tunnel = tunn.2.recv().await?;
 
         tunnel.write_all(&in_buffer[..n]).await?; // relay the first packet
-        tokio::io::copy_bidirectional(&mut stream, &mut tunnel).await?;
+        _ = tokio::io::copy_bidirectional(&mut stream, &mut tunnel).await;
+        _ = tunnel.shutdown().await;
+        _ = stream.shutdown().await;
     }
     Ok(())
 }

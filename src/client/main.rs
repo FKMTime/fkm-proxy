@@ -37,6 +37,18 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     let args = Args::parse();
 
+    loop {
+        if let Err(e) = connector(&args).await {
+            tracing::error!("Connector error: {e}");
+        }
+
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+
+    // Ok(())
+}
+
+async fn connector(args: &Args) -> Result<()> {
     let cert = rcgen::generate_simple_self_signed(vec!["proxy.lan".to_string()])?;
     let crt = cert_from_str(&cert.serialize_pem()?)?;
     let key = key_from_str(&cert.serialize_private_key_pem())?;
@@ -86,8 +98,6 @@ async fn main() -> Result<()> {
             });
         }
     }
-
-    // Ok(())
 }
 
 async fn spawn_tunnel(
@@ -121,8 +131,11 @@ async fn spawn_tunnel(
         let path = parts[1];
         let redirect = construct_http_redirect(&format!("https://{domain}{path}"));
         tunnel_stream.write_all(redirect.as_bytes()).await?;
+        _ = tunnel_stream.shutdown().await;
     } else {
-        tokio::io::copy_bidirectional(&mut local_stream, &mut tunnel_stream).await?;
+        _ = tokio::io::copy_bidirectional(&mut local_stream, &mut tunnel_stream).await;
+        _ = tunnel_stream.shutdown().await;
+        _ = local_stream.shutdown().await;
     }
 
     Ok(())

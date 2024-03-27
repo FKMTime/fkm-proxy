@@ -7,6 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
 pub mod certs;
+pub mod encryption;
 pub mod http;
 
 pub fn generate_hello_packet(

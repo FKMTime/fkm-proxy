@@ -148,11 +148,15 @@ async fn handle_client(mut stream: TcpStream, state: SharedProxyState, ssl: bool
         String::from_utf8_lossy(&host[5..]).trim().to_string()
     };
 
-    let tunn = get_tunn_or_error(&state, &host, &mut stream, ssl).await?;
+    let (tunn, token) = get_tunn_or_error(&state, &host, &mut stream, ssl).await?;
     tunn.0.send(u8::from(ssl)).await?;
     let mut tunnel = tunn.2.recv().await?;
 
-    tokio::io::copy_bidirectional(&mut stream, &mut tunnel).await?;
+    if ssl {
+        tokio::io::copy_bidirectional(&mut stream, &mut tunnel).await?;
+    } else {
+        ::utils::encryption::copy_bidirectional_enc(&mut tunnel, &mut stream, token).await?;
+    }
     Ok(())
 }
 
@@ -161,7 +165,7 @@ async fn get_tunn_or_error(
     host: &str,
     stream: &mut TcpStream,
     ssl: bool,
-) -> Result<TunnelEntry> {
+) -> Result<(TunnelEntry, u128)> {
     let tunn = match get_tunn(&state, &host).await {
         Ok(tunn) => tunn,
         Err(TunnelError::TunnelDoesNotExist) => {
@@ -216,7 +220,7 @@ async fn write_raw_http_resp(
     Ok(())
 }
 
-async fn get_tunn(state: &SharedProxyState, host: &str) -> Result<TunnelEntry, TunnelError> {
+async fn get_tunn(state: &SharedProxyState, host: &str) -> Result<(TunnelEntry, u128), TunnelError> {
     let token = state
         .get_client_token(&host)
         .await
@@ -227,5 +231,5 @@ async fn get_tunn(state: &SharedProxyState, host: &str) -> Result<TunnelEntry, T
         .await
         .ok_or_else(|| TunnelError::NoConnectorForTunnel)?;
 
-    Ok(tunn)
+    Ok((tunn, token))
 }

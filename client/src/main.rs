@@ -112,6 +112,7 @@ async fn main() -> Result<()> {
         let conn_buff = ::utils::generate_hello_packet(1, &args.token, &args.hash)?;
         tokio::task::spawn(spawn_tunnel(
             conn_buff,
+            args.token,
             args.addr.to_string(),
             args.proxy_addr.to_string(),
             ssl,
@@ -127,6 +128,7 @@ async fn main() -> Result<()> {
 
 async fn spawn_tunnel(
     conn_buff: [u8; 80],
+    token: u128,
     local_addr: String,
     proxy_addr: String,
     ssl: bool,
@@ -164,7 +166,9 @@ async fn spawn_tunnel(
         let redirect = ::utils::http::construct_http_redirect(&format!("https://{domain}{path}"));
         tunnel_stream.write_all(redirect.as_bytes()).await?;
     } else {
-        tokio::io::copy_bidirectional(&mut local_stream, &mut tunnel_stream).await?;
+        ::utils::encryption::copy_bidirectional_enc(&mut tunnel_stream, &mut local_stream, token)
+            .await?;
+        //tokio::io::copy_bidirectional(&mut local_stream, &mut tunnel_stream).await?;
     }
 
     Ok(())

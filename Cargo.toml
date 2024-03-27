@@ -1,18 +1,28 @@
 [package]
-name = "client"
+name = "fkm-proxy"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[[bin]]
+name = "fkm-proxy-client"
+path = "src/client/main.rs"
+
+[[bin]]
+name = "fkm-proxy-server"
+path = "src/server/main.rs"
 
 [dependencies]
 anyhow = "1.0.81"
-clap = { version = "4.5.3", features = ["derive", "env"] }
-dotenvy = "0.15.7"
-rcgen = "0.12.1"
+highway = "1.1.0"
+kanal = "0.1.0-pre8"
+thiserror = "1.0.58"
 tokio = { version = "1.36.0", features = ["full"] }
 tokio-rustls = { version = "0.26.0", features = ["ring", "logging", "tls12"], default-features = false }
-utils = { path = "../utils" }
+clap = { version = "4.5.4", features = ["derive", "env"] }
+dotenvy = "0.15.7"
+rcgen = "0.12.1"
+
+utils = { path = "./utils" }
 
 [profile.release]
 opt-level = "z"     # Optimize for size.

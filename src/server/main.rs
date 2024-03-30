@@ -22,6 +22,9 @@ struct Args {
 
     #[arg(short, long, env = "DOMAIN")]
     domain: String,
+
+    #[arg(short, long, default_value = "./domain.json", env = "SAVE_PATH")]
+    save_path: String,
 }
 
 #[tokio::main]
@@ -50,7 +53,10 @@ async fn main() -> Result<()> {
         .with_no_client_auth();
     let connector = TlsConnector::from(Arc::new(config));
 
-    let shared_proxy_state = SharedProxyState::new(acceptor, connector, args.domain);
+    let shared_proxy_state =
+        SharedProxyState::new(acceptor, connector, args.domain, args.save_path);
+
+    _ = shared_proxy_state.load_domains().await;
     tunnel::spawn_tunnel_connector(addrs, &args.bind_connector, shared_proxy_state.clone()).await?;
 
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;

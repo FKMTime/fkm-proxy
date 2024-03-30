@@ -23,6 +23,8 @@ dotenvy = "0.15.7"
 rcgen = "0.13.0"
 tracing = "0.1.40"
 tracing-subscriber = "0.3.18"
+serde = { version = "1.0.197", features = ["derive"] }
+serde_json = "1.0.115"
 
 utils = { path = "./utils" }
 

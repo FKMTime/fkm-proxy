@@ -1,5 +1,6 @@
 use highway::{HighwayHash, HighwayHasher};
 use kanal::{AsyncReceiver, AsyncSender};
+use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 use thiserror::Error;
 use tokio::{net::TcpStream, sync::RwLock};
@@ -18,15 +19,21 @@ pub struct ProxyState {
     pub tls_connector: Arc<TlsConnector>,
 
     pub tunnels: HashMap<u128, TunnelEntry>,
-    pub tokens: HashMap<u64, u128>,    // url(hashed) -> token
-    pub domains: HashMap<u64, String>, // url(hashed) -> domain
+    pub domains: HashMap<u64, (u128, String)>, // url(hashed) -> domain
+
+    pub save_path: String,
 }
 
 #[derive(Clone)]
 pub struct SharedProxyState(Arc<RwLock<ProxyState>>);
 
 impl SharedProxyState {
-    pub fn new(tls_acceptor: TlsAcceptor, tls_connector: TlsConnector, top_domain: String) -> Self {
+    pub fn new(
+        tls_acceptor: TlsAcceptor,
+        tls_connector: TlsConnector,
+        top_domain: String,
+        save_path: String,
+    ) -> Self {
         SharedProxyState(Arc::new(RwLock::new(ProxyState {
             top_domain,
 
@@ -34,8 +41,9 @@ impl SharedProxyState {
             tls_connector: Arc::new(tls_connector),
 
             tunnels: HashMap::new(),
-            tokens: HashMap::new(),
             domains: HashMap::new(),
+
+            save_path,
         })))
     }
 
@@ -52,16 +60,15 @@ impl SharedProxyState {
     pub async fn insert_client(&self, subdomain: &str, token: u128) -> anyhow::Result<u64> {
         let mut state = self.0.write().await;
         let url = format!("{}.{}", subdomain, state.top_domain);
-        if state.domains.values().any(|x| x == &url) {
+        if state.domains.values().any(|x| x.1 == url) {
             return Err(anyhow::anyhow!("Domain already exists!"));
         }
 
         let hash = HighwayHasher::default().hash64(url.as_bytes());
-        tracing::info!("New url: {url} with hash: {hash}");
-        tracing::info!("New token: {token}");
+        state.domains.insert(hash, (token, url));
+        drop(state);
 
-        state.domains.insert(hash, url.to_string());
-        state.tokens.insert(hash, token);
+        self.save_domains().await?;
         Ok(hash)
     }
 
@@ -77,12 +84,12 @@ impl SharedProxyState {
     pub async fn get_client_token(&self, url: &str) -> Option<u128> {
         let state = self.0.read().await;
         let hash = HighwayHasher::default().hash64(url.as_bytes());
-        state.tokens.get(&hash).copied()
+        state.domains.get(&hash).map(|x| x.0)
     }
 
     pub async fn get_token_by_url_hash(&self, url_hash: u64) -> Option<u128> {
         let state = self.0.read().await;
-        state.tokens.get(&url_hash).copied()
+        state.domains.get(&url_hash).map(|x| x.0)
     }
 
     pub async fn get_tunnel_entry(&self, token: u128) -> Option<TunnelEntry> {
@@ -112,12 +119,33 @@ impl SharedProxyState {
 
     pub async fn get_domain_by_hash(&self, hash: u64) -> Option<String> {
         let state = self.0.read().await;
-        state.domains.get(&hash).cloned()
+        state.domains.get(&hash).map(|x| x.1.clone())
     }
 
     pub async fn get_top_domain(&self) -> String {
         let state = self.0.read().await;
         state.top_domain.clone()
+    }
+
+    pub async fn save_domains(&self) -> anyhow::Result<()> {
+        let state = self.0.read().await;
+        let saved = SavedDomains {
+            domains: state.domains.clone(),
+        };
+
+        let data = serde_json::to_string(&saved)?;
+        tokio::fs::write(&state.save_path, data).await?;
+        Ok(())
+    }
+
+    pub async fn load_domains(&self) -> anyhow::Result<()> {
+        let mut state = self.0.write().await;
+
+        let data = tokio::fs::read_to_string(&state.save_path).await?;
+        let saved: SavedDomains = serde_json::from_str(&data)?;
+
+        state.domains = saved.domains;
+        Ok(())
     }
 }
 
@@ -131,4 +159,9 @@ pub enum TunnelError {
 
     #[error(transparent)]
     Anyhow(#[from] anyhow::Error),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SavedDomains {
+    pub domains: HashMap<u64, (u128, String)>,
 }

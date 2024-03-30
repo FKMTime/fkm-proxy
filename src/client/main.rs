@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::{command, Parser};
+use rcgen::CertifiedKey;
 use std::sync::Arc;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -49,9 +50,9 @@ async fn main() -> Result<()> {
 }
 
 async fn connector(args: &Args) -> Result<()> {
-    let cert = rcgen::generate_simple_self_signed(vec!["proxy.lan".to_string()])?;
-    let crt = cert_from_str(&cert.serialize_pem()?)?;
-    let key = key_from_str(&cert.serialize_private_key_pem())?;
+    let CertifiedKey { cert, key_pair } = rcgen::generate_simple_self_signed(vec!["proxy.lan".to_string()])?;
+    let crt = cert_from_str(&cert.pem())?;
+    let key = key_from_str(&key_pair.serialize_pem())?;
 
     let config = tokio_rustls::rustls::ServerConfig::builder()
         .with_no_client_auth()

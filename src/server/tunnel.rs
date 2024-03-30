@@ -1,11 +1,13 @@
 use crate::structs::{SharedProxyState, TunnelEntry, TunnelError};
 use anyhow::{anyhow, Result};
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
 use tokio_rustls::{rustls::pki_types, TlsAcceptor, TlsConnector};
+
+const STATIC_HTML: &str = include_str!("./index.html");
 
 pub async fn spawn_tunnel_connector(
     remote_addrs: Vec<(&str, bool)>,
@@ -13,17 +15,25 @@ pub async fn spawn_tunnel_connector(
     shared_proxy_state: SharedProxyState,
 ) -> Result<()> {
     for remote_addr in remote_addrs {
-        tokio::task::spawn(remote_listener(
-            remote_addr.0.to_string(),
-            shared_proxy_state.clone(),
-            remote_addr.1,
-        ));
+        let addr = remote_addr.0.to_string();
+        let shared_proxy_state = shared_proxy_state.clone();
+
+        tokio::task::spawn(async move {
+            let res = remote_listener(&addr, shared_proxy_state, remote_addr.1).await;
+            if let Err(e) = res {
+                tracing::error!("[{}] Remote listener error: {e}", addr);
+            }
+        });
     }
 
-    tokio::task::spawn(connector_listener(
-        connector_addr.to_string(),
-        shared_proxy_state.clone(),
-    ));
+    let connector_addr = connector_addr.to_string();
+    let shared_proxy_state = shared_proxy_state.clone();
+    tokio::task::spawn(async move {
+        let res = connector_listener(connector_addr, shared_proxy_state).await;
+        if let Err(e) = res {
+            tracing::error!("Connector listener error: {e}");
+        }
+    });
 
     Ok(())
 }
@@ -119,7 +129,7 @@ async fn connector_handler(
     Ok(())
 }
 
-async fn remote_listener(addr: String, state: SharedProxyState, ssl: bool) -> Result<()> {
+async fn remote_listener(addr: &str, state: SharedProxyState, ssl: bool) -> Result<()> {
     tracing::info!("Remote listening on: {addr} (SSL: {ssl})");
     let listener = TcpListener::bind(addr).await?;
     let acceptor = state.get_tls_acceptor().await;
@@ -162,6 +172,12 @@ where
     let mut in_buffer = [0; 8192];
 
     let (host, n) = ::utils::read_http_host(&mut stream, &mut in_buffer).await?;
+    if host == state.get_top_domain().await {
+        serve_top_domain(&mut stream, in_buffer, n, &state).await?;
+
+        return Ok(());
+    }
+
     if let Ok((tunn, _)) = get_tunn_or_error(&state, &host, &mut stream).await {
         tunn.0.send(u8::from(ssl)).await?;
         let mut tunnel = tunn.2.recv().await?;
@@ -227,4 +243,62 @@ async fn get_tunn(
         .ok_or_else(|| TunnelError::NoConnectorForTunnel)?;
 
     Ok((tunn, token))
+}
+
+async fn serve_top_domain<T>(
+    stream: &mut T,
+    in_buffer: [u8; 8192],
+    n: usize,
+    state: &SharedProxyState,
+) -> Result<()>
+where
+    T: AsyncRead + AsyncWrite + Unpin,
+{
+    let mut lines = in_buffer[..n].lines();
+    let http_header = lines
+        .next_line()
+        .await?
+        .ok_or_else(|| anyhow!("No http header!"))?;
+    let http_header = http_header.split_whitespace().collect::<Vec<&str>>();
+
+    if http_header[1].starts_with("/create") && http_header[0] == "POST" {
+        let query = http_header[1]
+            .split("?")
+            .nth(1)
+            .ok_or_else(|| anyhow!("No url query!"))?;
+
+        let search: HashMap<&str, &str> = query
+            .split("&")
+            .map(|x| x.split("=").collect::<Vec<&str>>())
+            .map(|x| (x[0], x[1]))
+            .collect();
+
+        let url = search.get("url").ok_or_else(|| anyhow!("No url!"))?;
+        let (hash, token) = state.generate_new_client(*url).await?;
+
+        let body = format!(
+            "{{\"url\":\"{}\",\"hash\":\"{}\",\"token\":\"{}\"}}",
+            url, hash, token
+        );
+
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+
+        stream.write_all(response.as_bytes()).await?;
+    } else if http_header[1] == "/" && http_header[0] == "GET" {
+        _ = ::utils::http::write_raw_http_resp(stream, 200, "OK", STATIC_HTML).await;
+    } else {
+        _ = ::utils::http::write_raw_http_resp(
+            stream,
+            404,
+            "NOT FOUND",
+            "That page does not exists!",
+        )
+        .await;
+        return Ok(());
+    }
+    Ok(())
 }

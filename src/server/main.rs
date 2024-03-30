@@ -1,5 +1,6 @@
 use crate::{cert::NoCertVerification, structs::SharedProxyState};
 use anyhow::Result;
+use clap::{command, Parser};
 use std::{path::Path, sync::Arc};
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 
@@ -7,20 +8,33 @@ mod cert;
 mod structs;
 mod tunnel;
 
+#[derive(Parser, Debug, Clone)]
+#[command(version, about, long_about = None)]
+struct Args {
+    #[arg(long, default_value = "127.0.0.1:80", env = "BIND_NONSSL")]
+    bind_nonssl: String,
+
+    #[arg(long, default_value = "127.0.0.1:443", env = "BIND_SSL")]
+    bind_ssl: String,
+
+    #[arg(long, default_value = "0.0.0.0:6969", env = "BIND_CONNECTOR")]
+    bind_connector: String,
+
+    #[arg(short, long, env = "DOMAIN")]
+    domain: String,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    _ = dotenvy::dotenv();
     tracing_subscriber::fmt::init();
 
-    let addrs = std::env::args()
-        .nth(1)
-        .unwrap_or("0.0.0.0:1337".to_string());
-    let connector_addr = "0.0.0.0:6969".to_string();
+    let args = Args::parse();
 
-    let addrs = addrs.split(',').collect::<Vec<_>>();
-    let addrs = addrs
-        .iter()
-        .map(|s| (*s, s.ends_with("443")))
-        .collect::<Vec<_>>();
+    let addrs = vec![
+        (args.bind_nonssl.as_ref(), false),
+        (args.bind_ssl.as_ref(), true),
+    ];
 
     let certs = ::utils::certs::load_certs(Path::new("key.crt"))?;
     let privkey = ::utils::certs::load_keys(Path::new("priv.key"))?;
@@ -36,33 +50,8 @@ async fn main() -> Result<()> {
         .with_no_client_auth();
     let connector = TlsConnector::from(Arc::new(config));
 
-    let shared_proxy_state = SharedProxyState::new(acceptor, connector);
-
-    shared_proxy_state
-        .insert_client("test2.fkm.filipton.space", 0x6942069420)
-        .await;
-
-    shared_proxy_state
-        .insert_client("dsa.fkm.filipton.space", 0x69420)
-        .await;
-
-    shared_proxy_state
-        .insert_client("sls.fkm.filipton.space", 0x69420)
-        .await;
-
-    shared_proxy_state
-        .insert_client("t1.fkm.filipton.space", 123456789)
-        .await;
-
-    shared_proxy_state
-        .insert_client("t2.fkm.filipton.space", 987654321)
-        .await;
-
-    shared_proxy_state
-        .insert_client("test.fkm.filipton.space", 69420)
-        .await;
-
-    tunnel::spawn_tunnel_connector(addrs, &connector_addr, shared_proxy_state.clone()).await?;
+    let shared_proxy_state = SharedProxyState::new(acceptor, connector, args.domain);
+    tunnel::spawn_tunnel_connector(addrs, &args.bind_connector, shared_proxy_state.clone()).await?;
 
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     tokio::select! {

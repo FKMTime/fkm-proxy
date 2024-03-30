@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PROXY PANEL</title>
+
+    <script>
+        async function createTunnel() {
+            const url = document.getElementById('url').value;
+
+            try {
+                let response = await fetch(`/create?url=${url}`, {
+                    method: 'POST',
+                });
+
+                let json = response = await response.json();
+                let hash = json.hash;
+                let token = json.token;
+
+                //alert(`Tunnel created successfully.\n\nHASH=${hash}\nTOKEN=${token}`);
+                prompt(`Tunnel created successfully. ${hash} ${token}`, `HASH=${hash}\nTOKEN=${token}`);
+                console.log(json);
+            } catch (error) {
+                alert('Error creating tunnel');
+            }
+        }
+    </script>
+
+<style>
+    .form {
+        display: flex;
+        flex-direction: column;
+        width: 50%;
+        margin: 0 auto;
+    }
+
+    .center {
+        text-align: center;
+    }
+</style>
+</head>
+<body>
+    <h1 class="center">PROXY PANEL</h1>
+    <form onsubmit="createTunnel(); return false;" class="form">
+        <label class="center" for="url">Enter URL</label>
+        <input type="text" id="url" placeholder="Enter URL">
+        <input type="submit" value="Fetch Data">
+    </form>
+</body>
+</html>

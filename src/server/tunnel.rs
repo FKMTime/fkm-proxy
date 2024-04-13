@@ -180,7 +180,9 @@ where
 
     if let Ok((tunn, _)) = get_tunn_or_error(&state, &host, &mut stream).await {
         tunn.0.send(u8::from(ssl)).await?;
+        tracing::trace!("Before tunnel recv");
         let mut tunnel = tunn.2.recv().await?;
+        tracing::trace!("After tunnel recv");
 
         tunnel.write_all(&in_buffer[..n]).await?; // relay the first packet
         _ = tokio::io::copy_bidirectional(&mut stream, &mut tunnel).await;

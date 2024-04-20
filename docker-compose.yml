@@ -1,0 +1,12 @@
+services:
+  proxy-client:
+    image: filipton/proxied-nginx:latest
+    build:
+      context: .
+      target: proxy-client
+
+  proxy-server:
+    image: filipton/proxy-server:latest
+    build:
+      context: .
+      target: proxy-server

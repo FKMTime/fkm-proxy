@@ -22,6 +22,7 @@ pub struct ProxyState {
     pub domains: HashMap<u64, (u128, String)>, // url(hashed) -> domain
 
     pub save_path: String,
+    pub tunnel_timeout: u64,
 }
 
 #[derive(Clone)]
@@ -33,6 +34,7 @@ impl SharedProxyState {
         tls_connector: TlsConnector,
         top_domain: String,
         save_path: String,
+        tunnel_timeout: u64,
     ) -> Self {
         SharedProxyState(Arc::new(RwLock::new(ProxyState {
             top_domain,
@@ -44,6 +46,7 @@ impl SharedProxyState {
             domains: HashMap::new(),
 
             save_path,
+            tunnel_timeout,
         })))
     }
 
@@ -85,6 +88,11 @@ impl SharedProxyState {
         let state = self.0.read().await;
         let hash = HighwayHasher::default().hash64(url.as_bytes());
         state.domains.get(&hash).map(|x| x.0)
+    }
+
+    pub async fn get_tunnel_timeout(&self) -> u64 {
+        let state = self.0.read().await;
+        state.tunnel_timeout
     }
 
     pub async fn get_token_by_url_hash(&self, url_hash: u64) -> Option<u128> {

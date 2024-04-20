@@ -25,6 +25,9 @@ struct Args {
 
     #[arg(short, long, default_value = "./domain.json", env = "SAVE_PATH")]
     save_path: String,
+
+    #[arg(short, long, default_value_t = 2500, env = "TUNNEL_TIMEOUT")]
+    tunnel_timeout: u64,
 }
 
 #[tokio::main]
@@ -53,8 +56,13 @@ async fn main() -> Result<()> {
         .with_no_client_auth();
     let connector = TlsConnector::from(Arc::new(config));
 
-    let shared_proxy_state =
-        SharedProxyState::new(acceptor, connector, args.domain, args.save_path);
+    let shared_proxy_state = SharedProxyState::new(
+        acceptor,
+        connector,
+        args.domain,
+        args.save_path,
+        args.tunnel_timeout,
+    );
 
     _ = shared_proxy_state.load_domains().await;
     tunnel::spawn_tunnel_connector(addrs, &args.bind_connector, shared_proxy_state.clone()).await?;

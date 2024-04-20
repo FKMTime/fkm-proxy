@@ -1,6 +1,6 @@
 use crate::structs::{SharedProxyState, TunnelEntry, TunnelError};
 use anyhow::{anyhow, Result};
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -180,10 +180,18 @@ where
 
     if let Ok((tunn, _)) = get_tunn_or_error(&state, &host, &mut stream).await {
         tunn.0.send(u8::from(ssl)).await?;
-        tracing::trace!("Before tunnel recv");
-        let mut tunnel = tunn.2.recv().await?;
-        tracing::trace!("After tunnel recv");
+        let tunnel_res = tokio::time::timeout(
+            Duration::from_millis(state.get_tunnel_timeout().await),
+            tunn.2.recv(),
+        )
+        .await;
 
+        if let Err(_) = tunnel_res {
+            tracing::error!("Tunnel timeout");
+            return Ok(());
+        }
+
+        let mut tunnel = tunnel_res??;
         tunnel.write_all(&in_buffer[..n]).await?; // relay the first packet
         _ = tokio::io::copy_bidirectional(&mut stream, &mut tunnel).await;
         _ = tunnel.shutdown().await;

@@ -39,8 +39,8 @@ impl SharedProxyState {
         tls_acceptor: TlsAcceptor,
         tls_connector: TlsConnector,
         top_domain: String,
-        save_path: String,
         panel_domain: String,
+        save_path: String,
         tunnel_timeout: u64,
     ) -> Self {
         SharedProxyState {

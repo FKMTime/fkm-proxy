@@ -13,6 +13,7 @@ pub type TunnelEntry = (
 );
 
 pub struct ProxyState {
+    pub panel_domain: String,
     pub top_domain: String,
 
     pub tls_acceptor: Arc<TlsAcceptor>,
@@ -28,6 +29,7 @@ pub struct ProxyState {
 #[derive(Clone)]
 pub struct SharedProxyState(Arc<RwLock<ProxyState>>);
 
+#[allow(dead_code)]
 impl SharedProxyState {
     pub fn new(
         tls_acceptor: TlsAcceptor,
@@ -35,9 +37,11 @@ impl SharedProxyState {
         top_domain: String,
         save_path: String,
         tunnel_timeout: u64,
+        panel_domain: String,
     ) -> Self {
         SharedProxyState(Arc::new(RwLock::new(ProxyState {
             top_domain,
+            panel_domain,
 
             tls_acceptor: Arc::new(tls_acceptor),
             tls_connector: Arc::new(tls_connector),
@@ -133,6 +137,11 @@ impl SharedProxyState {
     pub async fn get_top_domain(&self) -> String {
         let state = self.0.read().await;
         state.top_domain.clone()
+    }
+
+    pub async fn get_panel_domain(&self) -> String {
+        let state = self.0.read().await;
+        state.panel_domain.clone()
     }
 
     pub async fn save_domains(&self) -> anyhow::Result<()> {

@@ -172,8 +172,8 @@ where
     let mut in_buffer = [0; 8192];
 
     let (host, n) = ::utils::read_http_host(&mut stream, &mut in_buffer).await?;
-    if host == state.get_top_domain().await {
-        serve_top_domain(&mut stream, in_buffer, n, &state).await?;
+    if host == state.get_panel_domain().await {
+        serve_panel(&mut stream, in_buffer, n, &state).await?;
 
         return Ok(());
     }
@@ -255,7 +255,7 @@ async fn get_tunn(
     Ok((tunn, token))
 }
 
-async fn serve_top_domain<T>(
+async fn serve_panel<T>(
     stream: &mut T,
     in_buffer: [u8; 8192],
     n: usize,

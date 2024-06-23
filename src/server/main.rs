@@ -23,6 +23,9 @@ struct Args {
     #[arg(short, long, env = "DOMAIN")]
     domain: String,
 
+    #[arg(long, env = "PANEL_DOMAIN")]
+    panel_domain: Option<String>,
+
     #[arg(short, long, default_value = "./domain.json", env = "SAVE_PATH")]
     save_path: String,
 
@@ -59,9 +62,10 @@ async fn main() -> Result<()> {
     let shared_proxy_state = SharedProxyState::new(
         acceptor,
         connector,
-        args.domain,
+        args.domain.clone(),
         args.save_path,
         args.tunnel_timeout,
+        args.panel_domain.unwrap_or(args.domain),
     );
 
     _ = shared_proxy_state.load_domains().await;

@@ -172,9 +172,8 @@ where
     let mut in_buffer = [0; 8192];
 
     let (host, n) = ::utils::read_http_host(&mut stream, &mut in_buffer).await?;
-    if host == state.get_panel_domain().await {
+    if state.is_host_panel(&host) {
         serve_panel(&mut stream, in_buffer, n, &state).await?;
-
         return Ok(());
     }
 

@@ -63,9 +63,9 @@ async fn main() -> Result<()> {
         acceptor,
         connector,
         args.domain.clone(),
+        args.panel_domain.unwrap_or(args.domain),
         args.save_path,
         args.tunnel_timeout,
-        args.panel_domain.unwrap_or(args.domain),
     );
 
     _ = shared_proxy_state.load_domains().await;

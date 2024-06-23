@@ -12,22 +12,26 @@ pub type TunnelEntry = (
     AsyncReceiver<TlsStream<TcpStream>>,
 );
 
-pub struct ProxyState {
+pub struct InnerProxyState {
+    pub tunnels: HashMap<u128, TunnelEntry>,
+    pub domains: HashMap<u64, (u128, String)>, // url(hashed) -> domain
+}
+
+pub struct ConstProxyState {
     pub panel_domain: String,
     pub top_domain: String,
+    pub save_path: String,
+    pub tunnel_timeout: u64,
 
     pub tls_acceptor: Arc<TlsAcceptor>,
     pub tls_connector: Arc<TlsConnector>,
-
-    pub tunnels: HashMap<u128, TunnelEntry>,
-    pub domains: HashMap<u64, (u128, String)>, // url(hashed) -> domain
-
-    pub save_path: String,
-    pub tunnel_timeout: u64,
 }
 
 #[derive(Clone)]
-pub struct SharedProxyState(Arc<RwLock<ProxyState>>);
+pub struct SharedProxyState {
+    pub consts: Arc<ConstProxyState>,
+    pub inner: Arc<RwLock<InnerProxyState>>,
+}
 
 #[allow(dead_code)]
 impl SharedProxyState {
@@ -36,22 +40,25 @@ impl SharedProxyState {
         tls_connector: TlsConnector,
         top_domain: String,
         save_path: String,
-        tunnel_timeout: u64,
         panel_domain: String,
+        tunnel_timeout: u64,
     ) -> Self {
-        SharedProxyState(Arc::new(RwLock::new(ProxyState {
-            top_domain,
-            panel_domain,
+        SharedProxyState {
+            consts: Arc::new(ConstProxyState {
+                panel_domain,
+                top_domain,
+                save_path,
+                tunnel_timeout,
 
-            tls_acceptor: Arc::new(tls_acceptor),
-            tls_connector: Arc::new(tls_connector),
+                tls_acceptor: Arc::new(tls_acceptor),
+                tls_connector: Arc::new(tls_connector),
+            }),
 
-            tunnels: HashMap::new(),
-            domains: HashMap::new(),
-
-            save_path,
-            tunnel_timeout,
-        })))
+            inner: Arc::new(RwLock::new(InnerProxyState {
+                tunnels: HashMap::new(),
+                domains: HashMap::new(),
+            })),
+        }
     }
 
     pub async fn generate_new_client(&self, subdomain: &str) -> anyhow::Result<(u64, u128)> {
@@ -65,8 +72,8 @@ impl SharedProxyState {
     }
 
     pub async fn insert_client(&self, subdomain: &str, token: u128) -> anyhow::Result<u64> {
-        let mut state = self.0.write().await;
-        let url = format!("{}.{}", subdomain, state.top_domain);
+        let mut state = self.inner.write().await;
+        let url = format!("{}.{}", subdomain, self.consts.top_domain);
         if state.domains.values().any(|x| x.1 == url) {
             return Err(anyhow::anyhow!("Domain already exists!"));
         }
@@ -80,7 +87,7 @@ impl SharedProxyState {
     }
 
     pub async fn insert_tunnel_connector(&self, token: u128, tunnel: TunnelEntry) {
-        let mut state = self.0.write().await;
+        let mut state = self.inner.write().await;
         let old = state.tunnels.insert(token, tunnel);
 
         if let Some(old) = old {
@@ -89,76 +96,68 @@ impl SharedProxyState {
     }
 
     pub async fn get_client_token(&self, url: &str) -> Option<u128> {
-        let state = self.0.read().await;
+        let state = self.inner.read().await;
         let hash = HighwayHasher::default().hash64(url.as_bytes());
         state.domains.get(&hash).map(|x| x.0)
     }
 
     pub async fn get_tunnel_timeout(&self) -> u64 {
-        let state = self.0.read().await;
-        state.tunnel_timeout
+        self.consts.tunnel_timeout
     }
 
     pub async fn get_token_by_url_hash(&self, url_hash: u64) -> Option<u128> {
-        let state = self.0.read().await;
+        let state = self.inner.read().await;
         state.domains.get(&url_hash).map(|x| x.0)
     }
 
     pub async fn get_tunnel_entry(&self, token: u128) -> Option<TunnelEntry> {
-        let state = self.0.read().await;
+        let state = self.inner.read().await;
         state.tunnels.get(&token).cloned()
     }
 
     pub async fn get_tunnel_tx(&self, token: u128) -> Option<AsyncSender<TlsStream<TcpStream>>> {
-        let state = self.0.read().await;
+        let state = self.inner.read().await;
         state.tunnels.get(&token).map(|x| x.1.clone())
     }
 
     pub async fn remove_tunnel(&self, token: u128) {
-        let mut state = self.0.write().await;
+        let mut state = self.inner.write().await;
         state.tunnels.remove(&token);
     }
 
     pub async fn get_tls_acceptor(&self) -> Arc<TlsAcceptor> {
-        let state = self.0.read().await;
-        state.tls_acceptor.clone()
+        self.consts.tls_acceptor.clone()
     }
 
     pub async fn get_tls_connector(&self) -> Arc<TlsConnector> {
-        let state = self.0.read().await;
-        state.tls_connector.clone()
+        self.consts.tls_connector.clone()
     }
 
     pub async fn get_domain_by_hash(&self, hash: u64) -> Option<String> {
-        let state = self.0.read().await;
+        let state = self.inner.read().await;
         state.domains.get(&hash).map(|x| x.1.clone())
     }
 
-    pub async fn get_top_domain(&self) -> String {
-        let state = self.0.read().await;
-        state.top_domain.clone()
-    }
-
-    pub async fn get_panel_domain(&self) -> String {
-        let state = self.0.read().await;
-        state.panel_domain.clone()
+    #[inline(always)]
+    pub fn is_host_panel(&self, host: &str) -> bool {
+        host == self.consts.panel_domain
     }
 
     pub async fn save_domains(&self) -> anyhow::Result<()> {
-        let state = self.0.read().await;
+        let state = self.inner.read().await;
         let saved = SavedDomains {
             domains: state.domains.clone(),
         };
 
         let data = serde_json::to_string(&saved)?;
-        tokio::fs::write(&state.save_path, data).await?;
+        tokio::fs::write(&self.consts.save_path, data).await?;
         Ok(())
     }
 
     pub async fn load_domains(&self) -> anyhow::Result<()> {
-        let mut state = self.0.write().await;
+        let mut state = self.inner.write().await;
 
-        let data = tokio::fs::read_to_string(&state.save_path).await?;
+        let data = tokio::fs::read_to_string(&self.consts.save_path).await?;
         let saved: SavedDomains = serde_json::from_str(&data)?;
 
         state.domains = saved.domains;

@@ -1,7 +1,7 @@
 use crate::{cert::NoCertVerification, structs::SharedProxyState};
 use anyhow::Result;
 use clap::{command, Parser};
-use std::{path::Path, sync::Arc};
+use std::{path::PathBuf, sync::Arc};
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 
 mod cert;
@@ -11,6 +11,12 @@ mod tunnel;
 #[derive(Parser, Debug, Clone)]
 #[command(version, about, long_about = None)]
 struct Args {
+    #[arg(short, long, default_value = "cert.pem", env = "CERT_PATH")]
+    cert_path: PathBuf,
+
+    #[arg(short, long, default_value = "privkey.pem", env = "PRIVKEY_PATH")]
+    privkey_path: PathBuf,
+
     #[arg(long, default_value = "127.0.0.1:80", env = "BIND_NONSSL")]
     bind_nonssl: String,
 
@@ -45,8 +51,8 @@ async fn main() -> Result<()> {
         (args.bind_ssl.as_ref(), true),
     ];
 
-    let certs = ::utils::certs::load_certs(Path::new("key.crt"))?;
-    let privkey = ::utils::certs::load_keys(Path::new("priv.key"))?;
+    let certs = ::utils::certs::load_certs(&args.cert_path)?;
+    let privkey = ::utils::certs::load_keys(&args.privkey_path)?;
 
     let config = tokio_rustls::rustls::ServerConfig::builder()
         .with_no_client_auth()

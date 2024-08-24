@@ -50,7 +50,8 @@ async fn main() -> Result<()> {
 }
 
 async fn connector(args: &Args) -> Result<()> {
-    let CertifiedKey { cert, key_pair } = rcgen::generate_simple_self_signed(vec!["proxy.lan".to_string()])?;
+    let CertifiedKey { cert, key_pair } =
+        rcgen::generate_simple_self_signed(vec!["proxy.lan".to_string()])?;
     let crt = cert_from_str(&cert.pem())?;
     let key = key_from_str(&key_pair.serialize_pem())?;
 
@@ -70,34 +71,33 @@ async fn connector(args: &Args) -> Result<()> {
 
     hello_packet[0] = 0x01; // 0x01 - tunnel
 
-    let mut void = [0u8; 1000];
+    let mut buf = [0; 17];
     loop {
-        let n = stream.read(&mut void).await?;
-        for i in 0..n {
-            let ssl = void[i] == 0x01;
+        stream.read_exact(&mut buf).await?;
+        let ssl = buf[0] == 0x01;
 
-            let addr = args.addr.to_string();
-            let proxy_addr = args.proxy_addr.to_string();
-            let redirect_to_ssl = args.redirect_ssl && !ssl;
-            let domain = domain.to_string();
-            let acceptor = acceptor.clone();
+        let addr = args.addr.to_string();
+        let proxy_addr = args.proxy_addr.to_string();
+        let redirect_to_ssl = args.redirect_ssl && !ssl;
+        let domain = domain.to_string();
+        let acceptor = acceptor.clone();
 
-            tokio::task::spawn(async move {
-                let res = spawn_tunnel(
-                    hello_packet,
-                    addr,
-                    proxy_addr,
-                    redirect_to_ssl,
-                    domain,
-                    acceptor,
-                )
-                .await;
+        hello_packet[26..42].copy_from_slice(&buf[1..17]);
+        tokio::task::spawn(async move {
+            let res = spawn_tunnel(
+                hello_packet,
+                addr,
+                proxy_addr,
+                redirect_to_ssl,
+                domain,
+                acceptor,
+            )
+            .await;
 
-                if let Err(e) = res {
-                    tracing::error!("Tunnel Error: {e}");
-                }
-            });
-        }
+            if let Err(e) = res {
+                tracing::error!("Tunnel Error: {e}");
+            }
+        });
     }
 }
 

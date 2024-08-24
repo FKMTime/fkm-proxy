@@ -1,19 +1,25 @@
 use highway::{HighwayHash, HighwayHasher};
-use kanal::{AsyncReceiver, AsyncSender};
+use kanal::AsyncSender;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 use thiserror::Error;
-use tokio::{net::TcpStream, sync::RwLock};
-use tokio_rustls::{client::TlsStream, rustls::crypto::ring, TlsAcceptor, TlsConnector};
+use tokio::{
+    net::TcpStream,
+    sync::{oneshot::Sender, RwLock},
+};
+use tokio_rustls::{client::TlsStream, rustls::crypto::CryptoProvider, TlsAcceptor, TlsConnector};
 
-pub type TunnelEntry = (
-    AsyncSender<u8>,
-    AsyncSender<TlsStream<TcpStream>>,
-    AsyncReceiver<TlsStream<TcpStream>>,
-);
+/// Enum used to request tunnel from connector
+pub enum TunnelRequest {
+    Close,
+    Request { ssl: bool, tunnel_id: u128 },
+}
+
+pub type TunnelSender = AsyncSender<TunnelRequest>;
 
 pub struct InnerProxyState {
-    pub tunnels: HashMap<u128, TunnelEntry>,
+    pub tunnels: HashMap<u128, TunnelSender>,
+    pub requests: HashMap<u128, Sender<TlsStream<TcpStream>>>,
     pub domains: HashMap<u64, (u128, String)>, // url(hashed) -> domain
 }
 
@@ -25,6 +31,7 @@ pub struct ConstProxyState {
 
     pub tls_acceptor: Arc<TlsAcceptor>,
     pub tls_connector: Arc<TlsConnector>,
+    pub rng: Arc<CryptoProvider>,
 }
 
 #[derive(Clone)]
@@ -43,6 +50,8 @@ impl SharedProxyState {
         save_path: String,
         tunnel_timeout: u64,
     ) -> Self {
+        let rng = tokio_rustls::rustls::crypto::ring::default_provider();
+
         SharedProxyState {
             consts: Arc::new(ConstProxyState {
                 panel_domain,
@@ -52,17 +61,19 @@ impl SharedProxyState {
 
                 tls_acceptor: Arc::new(tls_acceptor),
                 tls_connector: Arc::new(tls_connector),
+                rng: Arc::new(rng),
             }),
 
             inner: Arc::new(RwLock::new(InnerProxyState {
                 tunnels: HashMap::new(),
+                requests: HashMap::new(),
                 domains: HashMap::new(),
             })),
         }
     }
 
     pub async fn generate_new_client(&self, subdomain: &str) -> anyhow::Result<(u64, u128)> {
-        let rng = ring::default_provider().secure_random;
+        let rng = self.consts.rng.secure_random;
         let mut token = [0u8; 16];
         rng.fill(&mut token).unwrap();
         let token = u128::from_be_bytes(token);
@@ -86,12 +97,12 @@ impl SharedProxyState {
         Ok(hash)
     }
 
-    pub async fn insert_tunnel_connector(&self, token: u128, tunnel: TunnelEntry) {
+    pub async fn insert_tunnel_connector(&self, token: u128, tunnel: TunnelSender) {
         let mut state = self.inner.write().await;
         let old = state.tunnels.insert(token, tunnel);
 
         if let Some(old) = old {
-            _ = old.0.send(u8::MAX).await; // close old connector
+            _ = old.send(TunnelRequest::Close).await;
         }
     }
 
@@ -110,14 +121,22 @@ impl SharedProxyState {
         state.domains.get(&url_hash).map(|x| x.0)
     }
 
-    pub async fn get_tunnel_entry(&self, token: u128) -> Option<TunnelEntry> {
+    pub async fn get_tunnel_entry(&self, token: u128) -> Option<TunnelSender> {
         let state = self.inner.read().await;
         state.tunnels.get(&token).cloned()
     }
 
-    pub async fn get_tunnel_tx(&self, token: u128) -> Option<AsyncSender<TlsStream<TcpStream>>> {
-        let state = self.inner.read().await;
-        state.tunnels.get(&token).map(|x| x.1.clone())
+    pub async fn insert_tunnel_oneshot(&self, tunnel_id: u128, tx: Sender<TlsStream<TcpStream>>) {
+        let mut state = self.inner.write().await;
+        state.requests.insert(tunnel_id, tx);
+    }
+
+    pub async fn get_tunnel_oneshot(
+        &self,
+        tunnel_id: u128,
+    ) -> Option<Sender<TlsStream<TcpStream>>> {
+        let mut state = self.inner.write().await;
+        state.requests.remove(&tunnel_id)
     }
 
     pub async fn remove_tunnel(&self, token: u128) {

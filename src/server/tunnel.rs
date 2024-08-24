@@ -1,4 +1,4 @@
-use crate::structs::{SharedProxyState, TunnelEntry, TunnelError};
+use crate::structs::{SharedProxyState, TunnelError, TunnelRequest, TunnelSender};
 use anyhow::{anyhow, Result};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::{
@@ -90,22 +90,20 @@ async fn connector_handler(
             .ok_or_else(|| anyhow!("Cant find domain!"))?;
         ::utils::send_string_to_stream(&mut stream, &domain).await?;
 
-        let (tx, rx) = kanal::unbounded_async::<u8>();
-        let (stream_tx, stream_rx) = kanal::unbounded_async();
-        state
-            .insert_tunnel_connector(token, (tx, stream_tx, stream_rx))
-            .await;
+        let (tx, rx) = kanal::unbounded_async::<TunnelRequest>();
+        state.insert_tunnel_connector(token, tx).await;
 
         loop {
             tokio::select! {
                 res = rx.recv() => {
                     let res = res?;
-                    if res == u8::MAX {
-                        // if max, close connector
-                        return Ok(());
+                    match res {
+                        TunnelRequest::Close => return Ok(()),
+                        TunnelRequest::Request { ssl, tunnel_id } => {
+                            stream.write_u8(u8::from(ssl)).await?;
+                            stream.write_u128(tunnel_id).await?;
+                        }
                     }
-
-                    stream.write_u8(res).await?;
                 }
                 res = stream.read_u8() => {
                     if res.is_err() {
@@ -118,12 +116,13 @@ async fn connector_handler(
         }
     } else if connection_buff[0] == 1 {
         // im the tunnel!
+        let tunnel_id = u128::from_be_bytes(connection_buff[26..42].try_into().unwrap());
         let tx = state
-            .get_tunnel_tx(token)
+            .get_tunnel_oneshot(tunnel_id)
             .await
-            .ok_or_else(|| anyhow!("Cant find tunnel tx!"))?;
+            .ok_or_else(|| anyhow!("Cant find tunnel with that id!"))?;
 
-        tx.send(stream).await?;
+        _ = tx.send(stream);
     }
 
     Ok(())
@@ -178,14 +177,26 @@ where
     }
 
     if let Ok((tunn, _)) = get_tunn_or_error(&state, &host, &mut stream).await {
-        tunn.0.send(u8::from(ssl)).await?;
-        let tunnel_res = tokio::time::timeout(
-            Duration::from_millis(state.get_tunnel_timeout().await),
-            tunn.2.recv(),
-        )
-        .await;
+        let rng = state.consts.rng.secure_random;
+        let mut token = [0u8; 16];
+        rng.fill(&mut token).unwrap();
+        let generated_tunnel_id = u128::from_be_bytes(token);
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        state.insert_tunnel_oneshot(generated_tunnel_id, tx).await;
+
+        tunn.send(TunnelRequest::Request {
+            ssl,
+            tunnel_id: generated_tunnel_id,
+        })
+        .await?;
+
+        let tunnel_res =
+            tokio::time::timeout(Duration::from_millis(state.get_tunnel_timeout().await), rx).await;
 
         if let Err(_) = tunnel_res {
+            _ = state.get_tunnel_oneshot(generated_tunnel_id).await;
+
             tracing::error!("Tunnel timeout");
             return Ok(());
         }
@@ -203,7 +214,7 @@ async fn get_tunn_or_error<T>(
     state: &SharedProxyState,
     host: &str,
     stream: &mut T,
-) -> Result<(TunnelEntry, u128)>
+) -> Result<(TunnelSender, u128)>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
@@ -240,7 +251,7 @@ where
 async fn get_tunn(
     state: &SharedProxyState,
     host: &str,
-) -> Result<(TunnelEntry, u128), TunnelError> {
+) -> Result<(TunnelSender, u128), TunnelError> {
     let token = state
         .get_client_token(&host)
         .await

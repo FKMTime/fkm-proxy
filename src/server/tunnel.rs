@@ -178,9 +178,9 @@ where
 
     if let Ok((tunn, _)) = get_tunn_or_error(&state, &host, &mut stream).await {
         let rng = state.consts.rng.secure_random;
-        let mut token = [0u8; 16];
-        rng.fill(&mut token).unwrap();
-        let generated_tunnel_id = u128::from_be_bytes(token);
+        let mut generated_tunnel_id = [0u8; 16];
+        rng.fill(&mut generated_tunnel_id).unwrap();
+        let generated_tunnel_id = u128::from_be_bytes(generated_tunnel_id);
 
         let (tx, rx) = tokio::sync::oneshot::channel();
         state.insert_tunnel_oneshot(generated_tunnel_id, tx).await;
@@ -205,8 +205,9 @@ where
         tunnel.write_all(&in_buffer[..n]).await?; // relay the first packet
         _ = tokio::io::copy_bidirectional(&mut stream, &mut tunnel).await;
         _ = tunnel.shutdown().await;
-        _ = stream.shutdown().await;
     }
+
+    _ = stream.shutdown().await;
     Ok(())
 }
 

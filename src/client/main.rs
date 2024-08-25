@@ -1,10 +1,11 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use clap::{command, Parser};
 use rcgen::CertifiedKey;
 use std::sync::Arc;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
+    time::Instant,
 };
 use utils::{
     certs::{cert_from_str, key_from_str},
@@ -12,6 +13,8 @@ use utils::{
     http::construct_http_redirect,
     read_string_from_stream,
 };
+
+const MAX_REQUEST_TIME: u128 = 1000;
 
 #[derive(Parser, Debug, Clone)]
 #[command(version, about, long_about = None)]
@@ -81,6 +84,7 @@ async fn connector(args: &Args) -> Result<()> {
         let redirect_to_ssl = args.redirect_ssl && !ssl;
         let domain = domain.to_string();
         let acceptor = acceptor.clone();
+        let requested_time = Instant::now();
 
         hello_packet[26..42].copy_from_slice(&buf[1..17]);
         tokio::task::spawn(async move {
@@ -91,6 +95,7 @@ async fn connector(args: &Args) -> Result<()> {
                 redirect_to_ssl,
                 domain,
                 acceptor,
+                requested_time,
             )
             .await;
 
@@ -108,7 +113,12 @@ async fn spawn_tunnel(
     redirect_to_ssl: bool,
     domain: String,
     acceptor: Arc<tokio_rustls::TlsAcceptor>,
+    request_time: Instant,
 ) -> Result<()> {
+    if request_time.elapsed().as_millis() > MAX_REQUEST_TIME {
+        return Err(anyhow!("Requested time exceeded max request time."));
+    }
+
     let tunnel_stream = TcpStream::connect(proxy_addr).await?;
     tunnel_stream.set_nodelay(true)?;
     let mut tunnel_stream = acceptor.accept(tunnel_stream).await?;
@@ -118,6 +128,7 @@ async fn spawn_tunnel(
     local_stream.set_nodelay(true)?;
 
     if redirect_to_ssl {
+        // for example: "GET / HTTP1.1"
         let mut buffer = [0u8; 1];
         let mut parts = String::new();
         loop {
@@ -132,12 +143,12 @@ async fn spawn_tunnel(
         let path = parts[1];
         let redirect = construct_http_redirect(&format!("https://{domain}{path}"));
         tunnel_stream.write_all(redirect.as_bytes()).await?;
-        _ = tunnel_stream.shutdown().await;
     } else {
         _ = tokio::io::copy_bidirectional(&mut local_stream, &mut tunnel_stream).await;
-        _ = tunnel_stream.shutdown().await;
-        _ = local_stream.shutdown().await;
     }
+
+    _ = tunnel_stream.shutdown().await;
+    _ = local_stream.shutdown().await;
 
     Ok(())
 }

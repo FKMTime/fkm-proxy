@@ -208,7 +208,8 @@ where
                 ),
             )
             .await;
-            tracing::error!("Tunnel timeout");
+            tracing::error!("Tunnel timeout (REF ID: {generated_tunnel_id})");
+
             return Ok(());
         }
 

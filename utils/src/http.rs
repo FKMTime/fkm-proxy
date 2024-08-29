@@ -15,10 +15,12 @@ where
     Ok(())
 }
 
+/// cotent type: text/html
 pub fn construct_http_resp(status: u16, status_str: &str, content: &str) -> String {
     format!(
         "HTTP/1.1 {status} {status_str}\r\n\
         Content-Length: {content_len}\r\n\
+        Content-Type: text/html\r\n\
         Connection: close\r\n\
         \r\n\
         {content}",

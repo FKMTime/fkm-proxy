@@ -7,7 +7,8 @@ use tokio::{
 };
 use tokio_rustls::{rustls::pki_types, TlsAcceptor, TlsConnector};
 
-const STATIC_HTML: &str = include_str!("./index.html");
+const PANEL_HTML: &str = include_str!("./resources/index.html");
+const ERROR_HTML: &str = include_str!("./resources/error.html");
 
 pub async fn spawn_tunnel_connector(
     remote_addrs: Vec<(&str, bool)>,
@@ -197,6 +198,16 @@ where
         if let Err(_) = tunnel_res {
             _ = state.get_tunnel_oneshot(generated_tunnel_id).await;
 
+            _ = ::utils::http::write_raw_http_resp(
+                &mut stream,
+                404,
+                "NOT FOUND",
+                &ERROR_HTML.replace(
+                    "{MSG}",
+                    &format!("Tunnel timeout! REF ID: {generated_tunnel_id}"),
+                ),
+            )
+            .await;
             tracing::error!("Tunnel timeout");
             return Ok(());
         }
@@ -226,7 +237,7 @@ where
                 stream,
                 404,
                 "NOT FOUND",
-                "That tunnel does not exists!",
+                &ERROR_HTML.replace("{MSG}", "That tunnel does not exists!"),
             )
             .await;
             anyhow::bail!("Tunnel does not exist!");
@@ -236,7 +247,7 @@ where
                 stream,
                 404,
                 "NOT FOUND",
-                "Connector for this tunnel isn't connected!",
+                &ERROR_HTML.replace("{MSG}", "Connector for this tunnel isn't connected!"),
             )
             .await;
             anyhow::bail!("No connector for tunnel!");
@@ -310,7 +321,7 @@ where
 
         stream.write_all(response.as_bytes()).await?;
     } else if http_header[1] == "/" && http_header[0] == "GET" {
-        _ = ::utils::http::write_raw_http_resp(stream, 200, "OK", STATIC_HTML).await;
+        _ = ::utils::http::write_raw_http_resp(stream, 200, "OK", PANEL_HTML).await;
     } else {
         _ = ::utils::http::write_raw_http_resp(
             stream,

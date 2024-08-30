@@ -74,10 +74,16 @@ async fn connector(args: &Args) -> Result<()> {
 
     hello_packet[0] = 0x01; // 0x01 - tunnel
 
-    let mut buf = [0; 17];
+    let mut buf = [0; 16];
     loop {
+        let first_byte = stream.read_u8().await?;
+        if first_byte == 0x69 {
+            stream.write_u8(0x69).await?;
+            continue; // ping/pong
+        }
+
         stream.read_exact(&mut buf).await?;
-        let ssl = buf[0] == 0x01;
+        let ssl = first_byte == 0x01;
 
         let addr = args.addr.to_string();
         let proxy_addr = args.proxy_addr.to_string();
@@ -86,7 +92,7 @@ async fn connector(args: &Args) -> Result<()> {
         let acceptor = acceptor.clone();
         let requested_time = Instant::now();
 
-        hello_packet[26..42].copy_from_slice(&buf[1..17]);
+        hello_packet[26..42].copy_from_slice(&buf[0..16]);
         tokio::task::spawn(async move {
             let res = spawn_tunnel(
                 hello_packet,

@@ -94,6 +94,7 @@ async fn connector_handler(
         let (tx, rx) = kanal::unbounded_async::<TunnelRequest>();
         state.insert_tunnel_connector(token, tx).await;
 
+        let mut pinger = tokio::time::interval(Duration::from_secs(15));
         loop {
             tokio::select! {
                 res = rx.recv() => {
@@ -113,6 +114,13 @@ async fn connector_handler(
                         return Ok(());
                     }
                 }
+                _ = pinger.tick() => {
+                    stream.write_u8(0x69).await?;
+                    let read = stream.read_u8().await?;
+                    if read != 0x69 {
+                        tracing::error!("Wrong pong response: {:x}", read);
+                    }
+                }
             }
         }
     } else if connection_buff[0] == 1 {
@@ -121,7 +129,7 @@ async fn connector_handler(
         let tx = state
             .get_tunnel_oneshot(tunnel_id)
             .await
-            .ok_or_else(|| anyhow!("Cant find tunnel with that id!"))?;
+            .ok_or_else(|| anyhow!("Cant find tunnel with that id (probably after timeout)!"))?;
 
         _ = tx.send(stream);
     }
@@ -172,6 +180,8 @@ where
     let mut in_buffer = [0; 8192];
 
     let (host, n) = ::utils::read_http_host(&mut stream, &mut in_buffer).await?;
+    let host = host.split(":").next().unwrap(); // remove port from host
+
     if state.is_host_panel(&host) {
         serve_panel(&mut stream, in_buffer, n, &state).await?;
         return Ok(());

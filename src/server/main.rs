@@ -1,6 +1,7 @@
 use crate::{cert::NoCertVerification, structs::SharedProxyState};
 use anyhow::Result;
 use clap::{command, Parser};
+use rcgen::CertifiedKey;
 use std::{path::PathBuf, sync::Arc};
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 
@@ -37,6 +38,9 @@ struct Args {
 
     #[arg(short, long, default_value_t = 2500, env = "TUNNEL_TIMEOUT")]
     tunnel_timeout: u64,
+
+    #[arg(long)]
+    generate_cert: bool,
 }
 
 #[tokio::main]
@@ -51,12 +55,21 @@ async fn main() -> Result<()> {
         (args.bind_ssl.as_ref(), true),
     ];
 
-    let certs = ::utils::certs::load_certs(&args.cert_path)?;
-    let privkey = ::utils::certs::load_keys(&args.privkey_path)?;
+    let cert = if args.generate_cert {
+        let CertifiedKey { cert, key_pair } =
+            rcgen::generate_simple_self_signed(vec![args.domain.clone()])?;
+        let crt = utils::certs::cert_from_str(&cert.pem())?;
+        let key = utils::certs::key_from_str(&key_pair.serialize_pem())?;
+        (crt, key)
+    } else {
+        let certs = ::utils::certs::load_certs(&args.cert_path)?;
+        let privkey = ::utils::certs::load_keys(&args.privkey_path)?;
+        (certs, privkey)
+    };
 
     let config = tokio_rustls::rustls::ServerConfig::builder()
         .with_no_client_auth()
-        .with_single_cert(certs, privkey)?;
+        .with_single_cert(cert.0, cert.1)?;
     let acceptor = TlsAcceptor::from(Arc::new(config));
 
     let config = tokio_rustls::rustls::ClientConfig::builder()

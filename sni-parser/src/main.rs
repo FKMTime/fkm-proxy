@@ -1,52 +1,51 @@
-use anyhow::{anyhow, bail, Result};
-use etherparse::{SlicedPacket, TransportSlice};
-use pcap_parser::{
-    traits::PcapReaderIterator, Block, PcapBlockOwned, PcapError, PcapNGReader,
-};
-use rustls::server::Acceptor;
-use std::fs::File;
+use anyhow::Result;
+use clap::Parser;
+use pcap::pcap_to_tests;
+use sni::{parse_sni, rustls_parse_sni};
+use std::path::PathBuf;
+
+mod pcap;
+mod sni;
+
+#[derive(Parser, Debug)]
+enum Args {
+    Tester {
+        /// Tests dir (for input and output)
+        #[arg(short, long)]
+        tests_dir: PathBuf,
+    },
+
+    PcapParser {
+        /// Input pcap file path
+        #[arg(short, long)]
+        input_pcap: PathBuf,
+
+        /// Tests dir (for input and output)
+        #[arg(short, long)]
+        tests_dir: PathBuf,
+    },
+}
 
 fn main() -> Result<()> {
-    let file = File::open("/home/notpilif/Downloads/clienthello.pcapng").unwrap();
-    let mut reader = PcapNGReader::new(4 * 1024 * 1024, file)?;
-
-    loop {
-        match reader.next() {
-            Ok((offset, block)) => {
-                if let PcapBlockOwned::NG(b) = block {
-                    if b.is_data_block() {
-                        if let Block::EnhancedPacket(packet) = b {
-                            match SlicedPacket::from_ethernet(&packet.data) {
-                                Err(value) => println!("Err {:?}", value),
-                                Ok(value) => {
-                                    if let Some(ref transport) = value.transport {
-                                        if let TransportSlice::Tcp(tcp) = transport {
-                                            let payload = tcp.payload();
-                                            let sni_res = rustls_parse_sni(payload);
-                                            if let Ok(sni) = sni_res {
-                                                println!("{sni:?}");
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                reader.consume(offset);
-            }
-            Err(PcapError::Eof) => break,
-            Err(PcapError::Incomplete(_)) => {
-                reader.refill().unwrap();
-            }
-            Err(e) => panic!("error while reading: {:?}", e),
+    let args = Args::parse();
+    match args {
+        Args::Tester { tests_dir } => {
+            tester(&tests_dir)?;
+        }
+        Args::PcapParser {
+            input_pcap,
+            tests_dir,
+        } => {
+            pcap_to_tests(&input_pcap, &tests_dir)?;
         }
     }
 
-    return Ok(());
+    Ok(())
+}
 
-    let test_files = std::fs::read_dir("./tests")?;
+fn tester(tests_dir: &PathBuf) -> Result<()> {
+    let test_files = std::fs::read_dir(tests_dir)?;
+    let mut wrong_n = 0;
     for file in test_files {
         let file = file?;
         if !file.file_name().to_str().unwrap_or("").ends_with(".bin") {
@@ -62,96 +61,11 @@ fn main() -> Result<()> {
         println!("Parsed: {parsed:?} | True parsed: {true_parsed:?}");
         if parsed != true_parsed {
             println!("[ERROR] WRONG PARSE!!!!");
+            wrong_n += 1;
         }
         println!("\n\n");
     }
 
+    println!("\n\nWRONG_N: {wrong_n}\n\n");
     Ok(())
-}
-
-fn parse_sni(buf: &[u8]) -> Result<String> {
-    let content_type = buf[0]; // 2bytes
-    let version = &buf[1..3]; // 2bytes
-    let len: u16 = u16::from_be_bytes([buf[3], buf[4]]); // 2bytes
-    println!("content_type: {content_type}, version: {version:02X?}, len: {len}");
-    if content_type != 22 || len == 0 {
-        bail!("[ERROR] not handshake packet or len 0");
-    }
-
-    let handshake_type = buf[5]; // 1byte
-    if handshake_type != 1 {
-        bail!("[ERROR] not client hello");
-    }
-
-    let len = buf[8] as u32 + ((buf[7] as u32) << 8) + ((buf[6] as u32) << 16); // 3bytes (be)
-    println!("client_hello_len: {len}");
-
-    let version = &buf[9..11]; // 2bytes
-    let random = &buf[11..43]; // 32bytes(always)
-    let session_id_length = buf[43] as usize; // 1byte
-    let session_id = &buf[44..(44 + session_id_length)]; //32 bytes in my testing (need to parse)
-
-    println!("ver: {version:02X?}, random: {random:02X?}, session_id_len: {session_id_length}, session_id: {session_id:02X?}");
-
-    let cipher_suites_len: u16 = u16::from_be_bytes([
-        buf[44 + session_id_length + 0],
-        buf[44 + session_id_length + 1],
-    ]); // 2bytes
-    println!("cip_len: {cipher_suites_len}");
-
-    let mut offset: usize = 44 + session_id_length + 2 + cipher_suites_len as usize;
-    let compression_methods_len = buf[offset] as usize; // 1byte
-    offset += 1 + compression_methods_len;
-
-    let mut extensions_len: u16 = u16::from_be_bytes([buf[offset], buf[offset + 1]]); // 2bytes
-    println!("extensions_len: {extensions_len}");
-
-    offset += 2;
-    while extensions_len > 0 {
-        let ext_type: u16 = u16::from_be_bytes([buf[offset], buf[offset + 1]]);
-        let ext_len: u16 = u16::from_be_bytes([buf[offset + 2], buf[offset + 3]]);
-        offset += 4;
-
-        if ext_type == 0 {
-            // server_name
-
-            let server_name_list_length: u16 = u16::from_be_bytes([buf[offset], buf[offset + 1]]);
-            println!("server_name_list_length: {server_name_list_length}");
-
-            // is this shit a list????? (parse with loop???)
-            let server_name_type = buf[offset + 2];
-            let server_name_length: u16 = u16::from_be_bytes([buf[offset + 3], buf[offset + 4]]);
-            let server_name = &buf[(offset + 5)..(offset + 5 + server_name_length as usize)];
-            let server_name = core::str::from_utf8(server_name)?;
-            println!("server_name_type: {server_name_type}, server_name_length: {server_name_length}, server_name: {server_name:?}");
-
-            if server_name_type == 0 {
-                return Ok(server_name.to_string());
-            }
-        }
-
-        println!("ext_type: {ext_type}, ext_len: {ext_len}");
-        offset += ext_len as usize;
-
-        extensions_len -= 4 + ext_len;
-    }
-
-    bail!("[ERROR] SNI NOT FOUND!")
-}
-
-fn rustls_parse_sni(buf: &[u8]) -> Result<String> {
-    let mut acceptor = Acceptor::default();
-    let mut n_buf = &buf[..];
-    acceptor.read_tls(&mut n_buf)?;
-
-    let accepted = acceptor
-        .accept()
-        .map_err(|e| anyhow!("{e:?}"))?
-        .ok_or_else(|| anyhow!("No tls msg"))?;
-
-    Ok(accepted
-        .client_hello()
-        .server_name()
-        .ok_or_else(|| anyhow!("No server name"))?
-        .to_string())
 }

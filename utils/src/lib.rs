@@ -1,9 +1,21 @@
 use anyhow::Result;
+use std::net::{SocketAddr, ToSocketAddrs};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 pub mod certs;
 pub mod http;
+
+pub fn parse_socketaddr(arg: &str) -> Result<SocketAddr> {
+    let addrs = arg.to_socket_addrs()?;
+    for addr in addrs {
+        if addr.is_ipv4() {
+            return Ok(addr);
+        }
+    }
+
+    Err(anyhow::anyhow!("No ipv4 socketaddr found!"))
+}
 
 pub fn generate_hello_packet(
     connector_type: u8,

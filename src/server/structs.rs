@@ -32,6 +32,9 @@ pub struct ConstProxyState {
     pub tls_acceptor: Arc<TlsAcceptor>,
     pub tls_connector: Arc<TlsConnector>,
     pub rng: Arc<CryptoProvider>,
+
+    pub nonssl_port: u16,
+    pub ssl_port: u16,
 }
 
 #[derive(Clone)]
@@ -49,6 +52,8 @@ impl SharedProxyState {
         panel_domain: String,
         save_path: String,
         tunnel_timeout: u64,
+        nonssl_port: u16,
+        ssl_port: u16,
     ) -> Self {
         let rng = tokio_rustls::rustls::crypto::ring::default_provider();
 
@@ -62,6 +67,9 @@ impl SharedProxyState {
                 tls_acceptor: Arc::new(tls_acceptor),
                 tls_connector: Arc::new(tls_connector),
                 rng: Arc::new(rng),
+
+                nonssl_port,
+                ssl_port,
             }),
 
             inner: Arc::new(RwLock::new(InnerProxyState {

@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use clap::{command, Parser};
 use rcgen::CertifiedKey;
-use std::sync::Arc;
+use std::{net::SocketAddr, sync::Arc};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -11,7 +11,7 @@ use utils::{
     certs::{cert_from_str, key_from_str},
     generate_hello_packet,
     http::construct_http_redirect,
-    read_string_from_stream,
+    parse_socketaddr, read_string_from_stream,
 };
 
 const MAX_REQUEST_TIME: u128 = 1000;
@@ -19,11 +19,11 @@ const MAX_REQUEST_TIME: u128 = 1000;
 #[derive(Parser, Debug, Clone)]
 #[command(version, about, long_about = None)]
 struct Args {
-    #[arg(short, long, default_value = "v1.filipton.space:6969", env = "PROXY")]
-    proxy_addr: String,
+    #[arg(short, long, value_parser = parse_socketaddr, default_value = "v1.filipton.space:6969", env = "PROXY")]
+    proxy_addr: SocketAddr,
 
-    #[arg(short, long, default_value = "127.0.0.1:80", env = "ADDR")]
-    addr: String,
+    #[arg(short, long, value_parser = parse_socketaddr, default_value = "127.0.0.1:80", env = "ADDR")]
+    addr: SocketAddr,
 
     #[arg(long, env = "HASH")]
     hash: u64,
@@ -69,8 +69,12 @@ async fn connector(args: &Args) -> Result<()> {
     let mut hello_packet = generate_hello_packet(0, &args.token, &args.hash)?;
 
     stream.write_all(&hello_packet).await?;
+    let nonssl_port = stream.read_u16().await?;
+    let ssl_port = stream.read_u16().await?;
     let domain = read_string_from_stream(&mut stream).await?;
-    tracing::info!("Access through: http://{}", domain);
+    tracing::info!(
+        "Access through:\n - http://{domain}:{nonssl_port}\n - https://{domain}:{ssl_port}"
+    );
 
     hello_packet[0] = 0x01; // 0x01 - tunnel
 
@@ -85,8 +89,8 @@ async fn connector(args: &Args) -> Result<()> {
         stream.read_exact(&mut buf).await?;
         let ssl = first_byte == 0x01;
 
-        let addr = args.addr.to_string();
-        let proxy_addr = args.proxy_addr.to_string();
+        let addr = args.addr;
+        let proxy_addr = args.proxy_addr;
         let redirect_to_ssl = args.redirect_ssl && !ssl;
         let domain = domain.to_string();
         let acceptor = acceptor.clone();
@@ -99,6 +103,7 @@ async fn connector(args: &Args) -> Result<()> {
                 addr,
                 proxy_addr,
                 redirect_to_ssl,
+                ssl_port,
                 domain,
                 acceptor,
                 requested_time,
@@ -114,9 +119,10 @@ async fn connector(args: &Args) -> Result<()> {
 
 async fn spawn_tunnel(
     hello_packet: [u8; 80],
-    local_addr: String,
-    proxy_addr: String,
+    local_addr: SocketAddr,
+    proxy_addr: SocketAddr,
     redirect_to_ssl: bool,
+    ssl_port: u16,
     domain: String,
     acceptor: Arc<tokio_rustls::TlsAcceptor>,
     request_time: Instant,
@@ -146,8 +152,8 @@ async fn spawn_tunnel(
         }
 
         let parts = parts.trim().split(" ").collect::<Vec<&str>>();
-        let path = parts[1];
-        let redirect = construct_http_redirect(&format!("https://{domain}{path}"));
+        let path = parts[1].trim_end_matches('/');
+        let redirect = construct_http_redirect(&format!("https://{domain}{path}:{ssl_port}"));
         tunnel_stream.write_all(redirect.as_bytes()).await?;
     } else {
         _ = tokio::io::copy_bidirectional(&mut local_stream, &mut tunnel_stream).await;

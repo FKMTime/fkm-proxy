@@ -2,8 +2,9 @@ use crate::{cert::NoCertVerification, structs::SharedProxyState};
 use anyhow::Result;
 use clap::{command, Parser};
 use rcgen::CertifiedKey;
-use std::{path::PathBuf, sync::Arc};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 use tokio_rustls::{TlsAcceptor, TlsConnector};
+use utils::parse_socketaddr;
 
 mod cert;
 mod structs;
@@ -18,14 +19,14 @@ struct Args {
     #[arg(short, long, default_value = "privkey.pem", env = "PRIVKEY_PATH")]
     privkey_path: PathBuf,
 
-    #[arg(long, default_value = "127.0.0.1:80", env = "BIND_NONSSL")]
-    bind_nonssl: String,
+    #[arg(long, value_parser = parse_socketaddr, default_value = "127.0.0.1:80", env = "BIND_NONSSL")]
+    bind_nonssl: SocketAddr,
 
-    #[arg(long, default_value = "127.0.0.1:443", env = "BIND_SSL")]
-    bind_ssl: String,
+    #[arg(long, value_parser = parse_socketaddr, default_value = "127.0.0.1:443", env = "BIND_SSL")]
+    bind_ssl: SocketAddr,
 
-    #[arg(long, default_value = "0.0.0.0:6969", env = "BIND_CONNECTOR")]
-    bind_connector: String,
+    #[arg(long, value_parser = parse_socketaddr, default_value = "0.0.0.0:6969", env = "BIND_CONNECTOR")]
+    bind_connector: SocketAddr,
 
     #[arg(short, long, env = "DOMAIN")]
     domain: String,
@@ -49,11 +50,6 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
     let args = Args::parse();
-
-    let addrs = vec![
-        (args.bind_nonssl.as_ref(), false),
-        (args.bind_ssl.as_ref(), true),
-    ];
 
     let cert = if args.generate_cert {
         let CertifiedKey { cert, key_pair } =
@@ -85,10 +81,14 @@ async fn main() -> Result<()> {
         args.panel_domain.unwrap_or(args.domain),
         args.save_path,
         args.tunnel_timeout,
+        args.bind_nonssl.port(),
+        args.bind_ssl.port(),
     );
 
     _ = shared_proxy_state.load_domains().await;
-    tunnel::spawn_tunnel_connector(addrs, &args.bind_connector, shared_proxy_state.clone()).await?;
+
+    let addrs = vec![(args.bind_nonssl, false), (args.bind_ssl, true)];
+    tunnel::spawn_tunnel_connector(addrs, args.bind_connector, shared_proxy_state.clone()).await?;
 
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     tokio::select! {

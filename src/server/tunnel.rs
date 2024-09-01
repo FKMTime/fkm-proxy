@@ -1,7 +1,7 @@
 use crate::structs::{SharedProxyState, TunnelError, TunnelRequest, TunnelSender};
 use anyhow::{anyhow, Result};
 use kanal::AsyncReceiver;
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -12,23 +12,21 @@ const PANEL_HTML: &str = include_str!("./resources/index.html");
 const ERROR_HTML: &str = include_str!("./resources/error.html");
 
 pub async fn spawn_tunnel_connector(
-    remote_addrs: Vec<(&str, bool)>,
-    connector_addr: &str,
+    remote_addrs: Vec<(SocketAddr, bool)>,
+    connector_addr: SocketAddr,
     shared_proxy_state: SharedProxyState,
 ) -> Result<()> {
     for remote_addr in remote_addrs {
-        let addr = remote_addr.0.to_string();
         let shared_proxy_state = shared_proxy_state.clone();
 
         tokio::task::spawn(async move {
-            let res = remote_listener(&addr, shared_proxy_state, remote_addr.1).await;
+            let res = remote_listener(remote_addr.0, shared_proxy_state, remote_addr.1).await;
             if let Err(e) = res {
-                tracing::error!("[{}] Remote listener error: {e}", addr);
+                tracing::error!("[{}] Remote listener error: {e}", remote_addr.0);
             }
         });
     }
 
-    let connector_addr = connector_addr.to_string();
     let shared_proxy_state = shared_proxy_state.clone();
     tokio::task::spawn(async move {
         let res = connector_listener(connector_addr, shared_proxy_state).await;
@@ -40,7 +38,7 @@ pub async fn spawn_tunnel_connector(
     Ok(())
 }
 
-async fn connector_listener(addr: String, state: SharedProxyState) -> Result<()> {
+async fn connector_listener(addr: SocketAddr, state: SharedProxyState) -> Result<()> {
     tracing::info!("Connector listening on: {addr}");
     let listener = TcpListener::bind(addr).await?;
     let connector = state.get_tls_connector().await;
@@ -90,6 +88,9 @@ async fn connector_handler(
             .get_domain_by_hash(url_hash)
             .await
             .ok_or_else(|| anyhow!("Cant find domain!"))?;
+
+        stream.write_u16(state.consts.nonssl_port).await?;
+        stream.write_u16(state.consts.ssl_port).await?;
         ::utils::send_string_to_stream(&mut stream, &domain).await?;
 
         let (tx, rx) = kanal::unbounded_async::<TunnelRequest>();
@@ -147,7 +148,7 @@ async fn connector_loop(
     }
 }
 
-async fn remote_listener(addr: &str, state: SharedProxyState, ssl: bool) -> Result<()> {
+async fn remote_listener(addr: SocketAddr, state: SharedProxyState, ssl: bool) -> Result<()> {
     tracing::info!("Remote listening on: {addr} (SSL: {ssl})");
     let listener = TcpListener::bind(addr).await?;
     let acceptor = state.get_tls_acceptor().await;

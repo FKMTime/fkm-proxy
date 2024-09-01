@@ -1,7 +1,51 @@
 use anyhow::{anyhow, bail, Result};
+use etherparse::{SlicedPacket, TransportSlice};
+use pcap_parser::{
+    traits::PcapReaderIterator, Block, PcapBlockOwned, PcapError, PcapNGReader,
+};
 use rustls::server::Acceptor;
+use std::fs::File;
 
 fn main() -> Result<()> {
+    let file = File::open("/home/notpilif/Downloads/clienthello.pcapng").unwrap();
+    let mut reader = PcapNGReader::new(4 * 1024 * 1024, file)?;
+
+    loop {
+        match reader.next() {
+            Ok((offset, block)) => {
+                if let PcapBlockOwned::NG(b) = block {
+                    if b.is_data_block() {
+                        if let Block::EnhancedPacket(packet) = b {
+                            match SlicedPacket::from_ethernet(&packet.data) {
+                                Err(value) => println!("Err {:?}", value),
+                                Ok(value) => {
+                                    if let Some(ref transport) = value.transport {
+                                        if let TransportSlice::Tcp(tcp) = transport {
+                                            let payload = tcp.payload();
+                                            let sni_res = rustls_parse_sni(payload);
+                                            if let Ok(sni) = sni_res {
+                                                println!("{sni:?}");
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                reader.consume(offset);
+            }
+            Err(PcapError::Eof) => break,
+            Err(PcapError::Incomplete(_)) => {
+                reader.refill().unwrap();
+            }
+            Err(e) => panic!("error while reading: {:?}", e),
+        }
+    }
+
+    return Ok(());
+
     let test_files = std::fs::read_dir("./tests")?;
     for file in test_files {
         let file = file?;
@@ -13,21 +57,7 @@ fn main() -> Result<()> {
         println!("\n\nParse: {file:?}");
         let buf = std::fs::read(file.path())?;
         let parsed = parse_sni(&buf)?;
-
-        let mut acceptor = Acceptor::default();
-        let mut n_buf = &buf[..];
-        acceptor.read_tls(&mut n_buf)?;
-
-        let accepted = acceptor
-            .accept()
-            .map_err(|e| anyhow!("{e:?}"))?
-            .ok_or_else(|| anyhow!("No tls msg"))?;
-
-        let true_parsed = accepted
-            .client_hello()
-            .server_name()
-            .ok_or_else(|| anyhow!("No server name"))?
-            .to_string();
+        let true_parsed = rustls_parse_sni(&buf)?;
 
         println!("Parsed: {parsed:?} | True parsed: {true_parsed:?}");
         if parsed != true_parsed {
@@ -107,4 +137,21 @@ fn parse_sni(buf: &[u8]) -> Result<String> {
     }
 
     bail!("[ERROR] SNI NOT FOUND!")
+}
+
+fn rustls_parse_sni(buf: &[u8]) -> Result<String> {
+    let mut acceptor = Acceptor::default();
+    let mut n_buf = &buf[..];
+    acceptor.read_tls(&mut n_buf)?;
+
+    let accepted = acceptor
+        .accept()
+        .map_err(|e| anyhow!("{e:?}"))?
+        .ok_or_else(|| anyhow!("No tls msg"))?;
+
+    Ok(accepted
+        .client_hello()
+        .server_name()
+        .ok_or_else(|| anyhow!("No server name"))?
+        .to_string())
 }

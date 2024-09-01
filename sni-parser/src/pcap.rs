@@ -1,5 +1,5 @@
 use anyhow::{bail, Result};
-use etherparse::{PacketHeaders, SlicedPacket, TransportSlice};
+use etherparse::{SlicedPacket, TransportSlice};
 use pcap_parser::{traits::PcapReaderIterator, Block, PcapBlockOwned, PcapError, PcapNGReader};
 use std::{fs::File, path::PathBuf};
 

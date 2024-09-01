@@ -75,6 +75,56 @@ pub fn parse_sni(buf: &[u8]) -> Result<String> {
     bail!("[ERROR] SNI NOT FOUND!")
 }
 
+pub fn parse_sni_clean(buf: &[u8]) -> Result<String> {
+    if buf.len() < 44 {
+        bail!("Buf len < 44");
+    }
+
+    if buf[0] != 22 {
+        bail!("Not client hello");
+    }
+
+    let handshake_type = buf[5]; // 1byte
+    if handshake_type != 1 {
+        bail!("[ERROR] not client hello");
+    }
+
+    let session_id_length = buf[43] as usize; // 1byte
+    let cipher_suites_len: u16 = u16::from_be_bytes([
+        buf[44 + session_id_length + 0],
+        buf[44 + session_id_length + 1],
+    ]); // 2bytes
+
+    let mut offset: usize = 44 + session_id_length + 2 + cipher_suites_len as usize;
+    let compression_methods_len = buf[offset] as usize; // 1byte
+    offset += 1 + compression_methods_len;
+
+    let mut extensions_len: u16 = u16::from_be_bytes([buf[offset], buf[offset + 1]]); // 2bytes
+    offset += 2;
+
+    while extensions_len > 0 {
+        let ext_type: u16 = u16::from_be_bytes([buf[offset], buf[offset + 1]]);
+        let ext_len: u16 = u16::from_be_bytes([buf[offset + 2], buf[offset + 3]]);
+        offset += 4;
+
+        if ext_type == 0 {
+            let server_name_type = buf[offset + 2];
+            let server_name_length: u16 = u16::from_be_bytes([buf[offset + 3], buf[offset + 4]]);
+            let server_name = &buf[(offset + 5)..(offset + 5 + server_name_length as usize)];
+            let server_name = core::str::from_utf8(server_name)?;
+
+            if server_name_type == 0 {
+                return Ok(server_name.to_string());
+            }
+        }
+
+        offset += ext_len as usize;
+        extensions_len -= 4 + ext_len;
+    }
+
+    bail!("[ERROR] SNI NOT FOUND!")
+}
+
 pub fn rustls_parse_sni(buf: &[u8]) -> Result<String> {
     let mut acceptor = Acceptor::default();
     let mut n_buf = &buf[..];

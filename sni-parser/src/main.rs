@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
 use pcap::pcap_to_tests;
-use sni::{parse_sni, rustls_parse_sni};
+use sni::{parse_sni, parse_sni_clean, rustls_parse_sni};
 use std::path::PathBuf;
 
 mod pcap;
@@ -55,7 +55,8 @@ fn tester(tests_dir: &PathBuf) -> Result<()> {
 
         println!("\n\nParse: {file:?}");
         let buf = std::fs::read(file.path())?;
-        let parsed = parse_sni(&buf)?;
+        //let parsed = parse_sni(&buf)?;
+        let parsed = parse_sni_clean(&buf)?;
         let true_parsed = rustls_parse_sni(&buf)?;
 
         println!("Parsed: {parsed:?} | True parsed: {true_parsed:?}");

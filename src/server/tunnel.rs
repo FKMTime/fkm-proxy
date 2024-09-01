@@ -175,7 +175,7 @@ async fn handle_client(
     acceptor: Arc<TlsAcceptor>,
 ) -> Result<()> {
     if ssl {
-        let stream = acceptor.accept(stream).await?;
+        //let stream = acceptor.accept(stream).await?;
         handle_client_inner(stream, state, true).await?;
     } else {
         handle_client_inner(stream, state, false).await?;
@@ -190,14 +190,36 @@ where
 {
     let mut in_buffer = [0; 8192];
 
-    let (host, n) = ::utils::read_http_host(&mut stream, &mut in_buffer).await?;
-    let host = host.split(":").next().unwrap(); // remove port from host
+    let (host, n) = if ssl {
+        let n = stream.read(&mut in_buffer).await?;
+        let mut n_buf = &in_buffer[..n];
+
+        let mut acceptor = tokio_rustls::rustls::server::Acceptor::default();
+        _ = acceptor.read_tls(&mut n_buf);
+        let accepted = acceptor
+            .accept()
+            .map_err(|e| anyhow::anyhow!(format!("{e:?}")))?
+            .ok_or_else(|| anyhow::anyhow!("No tls message"))?;
+
+        (
+            accepted
+                .client_hello()
+                .server_name()
+                .ok_or_else(|| anyhow::anyhow!("No server name"))?
+                .to_string(),
+            n,
+        )
+    } else {
+        let (host, n) = ::utils::read_http_host(&mut stream, &mut in_buffer).await?;
+        let host = host.split(":").next().unwrap(); // remove port from host
+
+        (host.to_string(), n)
+    };
 
     if state.is_host_panel(&host) {
         serve_panel(&mut stream, in_buffer, n, &state).await?;
         return Ok(());
     }
-
     if let Ok((tunn, _)) = get_tunn_or_error(&state, &host, &mut stream).await {
         let rng = state.consts.rng.secure_random;
         let mut generated_tunnel_id = [0u8; 16];

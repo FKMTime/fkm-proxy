@@ -56,7 +56,7 @@ fn tester(tests_dir: &PathBuf) -> Result<()> {
         println!("\n\nParse: {file:?}");
         let buf = std::fs::read(file.path())?;
         //let parsed = parse_sni(&buf)?;
-        let parsed = parse_sni_clean(&buf)?;
+        let parsed = parse_sni_clean(&buf).unwrap_or("".to_string());
         let true_parsed = rustls_parse_sni(&buf)?;
 
         println!("Parsed: {parsed:?} | True parsed: {true_parsed:?}");

@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::Parser;
 use hkdf::Hkdf;
 use pcap::pcap_to_tests;
+use s2n_quic_core::crypto::HeaderKey;
 use s2n_quic_core::crypto::InitialKey as _;
 use s2n_quic_core::crypto::Key;
 use s2n_quic_crypto::initial::InitialKey;
@@ -34,14 +35,23 @@ enum Args {
 
 fn main() -> Result<()> {
     let dcid = [0x83, 0x94, 0xc8, 0xf0, 0x3e, 0x51, 0x57, 0x08]; // read from packet
-    let (key, _) = InitialKey::new_server(&dcid);
-
-    let header = [
-        0xc3, 0x00, 0x00, 0x00, 0x01, 0x08, 0x83, 0x94, 0xc8, 0xf0, 0x3e, 0x51, 0x57, 0x08, 0x00,
-        0x00, 0x44, 0x9e, 0x00, 0x00, 0x00, 0x02,
-    ];
-
     let mut payload = hex::decode(std::fs::read_to_string("./encrypted-packet.txt")?.trim())?;
+
+    let (key, header) = InitialKey::new_server(&dcid);
+    println!("sample {:02X?}", &payload[22..38]);
+    let mask = header.opening_header_protection_mask(&payload[22..38]);
+    println!("mask {mask:02X?}");
+
+    let header = &mut payload.clone()[0..22];
+    header[0] ^= mask[0] & 0x0f;
+    header[18] ^= mask[1];
+    header[19] ^= mask[2];
+    header[20] ^= mask[3];
+    header[21] ^= mask[4];
+
+    println!("{header:02X?}");
+
+    let mut payload = &mut payload[22..];
     key.decrypt(2, &header, &mut payload).unwrap();
 
     println!("{payload:02X?}");

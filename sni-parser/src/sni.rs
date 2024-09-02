@@ -75,27 +75,27 @@ pub fn parse_sni(buf: &[u8]) -> Result<String> {
     bail!("[ERROR] SNI NOT FOUND!")
 }
 
-pub fn parse_sni_clean(buf: &[u8]) -> Option<String> {
-    if buf.len() < 44 {
-        return None;
-    }
-
+pub fn parse_sni_normal(buf: &[u8]) -> Option<String> {
     if buf[0] != 22 {
         return None;
     }
 
-    let handshake_type = buf[5]; // 1byte
+    parse_sni_inner(&buf[5..])
+}
+
+pub fn parse_sni_inner(buf: &[u8]) -> Option<String> {
+    let handshake_type = *buf.get(0)?; // 1byte
     if handshake_type != 1 {
         return None;
     }
 
-    let session_id_length = buf[43] as usize; // 1byte
+    let session_id_length = *buf.get(38)? as usize; // 1byte
     let cipher_suites_len: u16 = u16::from_be_bytes([
-        *buf.get(44 + session_id_length + 0)?,
-        *buf.get(44 + session_id_length + 1)?,
+        *buf.get(39 + session_id_length + 0)?,
+        *buf.get(39 + session_id_length + 1)?,
     ]); // 2bytes
 
-    let mut offset: usize = 44 + session_id_length + 2 + cipher_suites_len as usize;
+    let mut offset: usize = 39 + session_id_length + 2 + cipher_suites_len as usize;
     let compression_methods_len = *buf.get(offset)? as usize; // 1byte
     offset += 1 + compression_methods_len;
 

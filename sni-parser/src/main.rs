@@ -1,8 +1,9 @@
 use anyhow::Result;
 use clap::Parser;
 use pcap::pcap_to_tests;
-use sni::{parse_sni, parse_sni_clean, rustls_parse_sni};
+use sni::{parse_sni, parse_sni_normal, rustls_parse_sni};
 use std::path::PathBuf;
+use tquic::PacketHeader;
 
 mod pcap;
 mod sni;
@@ -27,6 +28,13 @@ enum Args {
 }
 
 fn main() -> Result<()> {
+    // test quic parsing
+    //let quic_packet = std::fs::read("/home/notpilif/Downloads/quic-initial.bin")?;
+    //let packet_header = PacketHeader::from_bytes(&quic_packet, 8)?;
+    //println!("{packet_header:?}");
+
+    //return Ok(());
+
     let args = Args::parse();
     match args {
         Args::Tester { tests_dir } => {
@@ -56,8 +64,8 @@ fn tester(tests_dir: &PathBuf) -> Result<()> {
         println!("\n\nParse: {file:?}");
         let buf = std::fs::read(file.path())?;
         //let parsed = parse_sni(&buf)?;
-        let parsed = parse_sni_clean(&buf).unwrap_or("".to_string());
-        let true_parsed = rustls_parse_sni(&buf)?;
+        let parsed = parse_sni_normal(&buf).unwrap_or("".to_string());
+        let true_parsed = rustls_parse_sni(&buf).unwrap_or("ERROR".to_string());
 
         println!("Parsed: {parsed:?} | True parsed: {true_parsed:?}");
         if parsed != true_parsed {

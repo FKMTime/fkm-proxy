@@ -1,11 +1,11 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use clap::Parser;
 use pcap::pcap_to_tests;
-use sni::{parse_sni, parse_sni_normal, rustls_parse_sni};
+use qls_proto_utils::tls::sni::parse_sni;
+use rustls::server::Acceptor;
 use std::path::PathBuf;
 
 mod pcap;
-mod sni;
 
 #[derive(Parser, Debug)]
 enum Args {
@@ -56,7 +56,7 @@ fn tester(tests_dir: &PathBuf) -> Result<()> {
         println!("\n\nParse: {file:?}");
         let buf = std::fs::read(file.path())?;
         //let parsed = parse_sni(&buf)?;
-        let parsed = parse_sni_normal(&buf).unwrap_or("".to_string());
+        let parsed = parse_sni(&buf).unwrap_or("".to_string());
         let true_parsed = rustls_parse_sni(&buf).unwrap_or("ERROR".to_string());
 
         println!("Parsed: {parsed:?} | True parsed: {true_parsed:?}");
@@ -69,4 +69,21 @@ fn tester(tests_dir: &PathBuf) -> Result<()> {
 
     println!("\n\nWRONG_N: {wrong_n}\n\n");
     Ok(())
+}
+
+pub fn rustls_parse_sni(buf: &[u8]) -> Result<String> {
+    let mut acceptor = Acceptor::default();
+    let mut n_buf = &buf[..];
+    acceptor.read_tls(&mut n_buf)?;
+
+    let accepted = acceptor
+        .accept()
+        .map_err(|e| anyhow!("{e:?}"))?
+        .ok_or_else(|| anyhow!("No tls msg"))?;
+
+    Ok(accepted
+        .client_hello()
+        .server_name()
+        .ok_or_else(|| anyhow!("No server name"))?
+        .to_string())
 }

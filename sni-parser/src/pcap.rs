@@ -30,7 +30,7 @@ pub fn pcap_to_tests(pcap_path: &PathBuf, tests_path: &PathBuf) -> Result<()> {
 
                                             if tcp.psh() {
                                                 let sni_res =
-                                                    crate::sni::rustls_parse_sni(&tmp_buf);
+                                                    crate::rustls_parse_sni(&tmp_buf);
 
                                                 if let Ok(sni) = sni_res {
                                                     println!("{sni:?}");

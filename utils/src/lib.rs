@@ -44,7 +44,7 @@ pub fn parse_hello_packet(
         return Err(HelloPacketError::TokenMismatch);
     }
 
-    Ok(connection_buff[26] == 0x00)
+    Ok(connection_buff[26] != 0x00)
 }
 
 pub fn generate_string_packet(string: &str) -> Result<Vec<u8>> {

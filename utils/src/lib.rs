@@ -21,16 +21,21 @@ pub fn generate_hello_packet(
     connector_type: u8,
     token: &u128,
     hash: &u64,
+    own_ssl: bool,
 ) -> Result<[u8; 80], HelloPacketError> {
     let mut conn_buff = [0u8; 80];
     conn_buff[0] = connector_type;
     conn_buff[1..9].copy_from_slice(&hash.to_be_bytes());
     conn_buff[10..26].copy_from_slice(&token.to_be_bytes());
+    conn_buff[26] = own_ssl as u8;
 
     Ok(conn_buff)
 }
 
-pub fn parse_hello_packet(token: u128, connection_buff: &[u8; 80]) -> Result<(), HelloPacketError> {
+pub fn parse_hello_packet(
+    token: u128,
+    connection_buff: &[u8; 80],
+) -> Result<bool, HelloPacketError> {
     //let parsed_connector_type = connection_buff[0];
     //let parsed_hash = u64::from_be_bytes(connection_buff[1..9].try_into()?);
     let parsed_token = u128::from_be_bytes(connection_buff[10..26].try_into()?);
@@ -39,7 +44,7 @@ pub fn parse_hello_packet(token: u128, connection_buff: &[u8; 80]) -> Result<(),
         return Err(HelloPacketError::TokenMismatch);
     }
 
-    Ok(())
+    Ok(connection_buff[26] == 0x00)
 }
 
 pub fn generate_string_packet(string: &str) -> Result<Vec<u8>> {
@@ -88,16 +93,12 @@ pub enum HelloPacketError {
     Anyhow(#[from] anyhow::Error),
 }
 
-pub async fn read_http_host<T>(stream: &mut T, in_buffer: &mut [u8]) -> Result<(String, usize)>
-where
-    T: AsyncRead + AsyncWrite + Unpin,
-{
-    let n = stream.read(in_buffer).await?;
-    let mut lines = in_buffer[..n].split(|&x| x == b'\n');
+pub fn read_http_host(in_buffer: &[u8]) -> Result<String> {
+    let mut lines = in_buffer.split(|&x| x == b'\n');
     let host = lines
         .find(|x| x.to_ascii_lowercase().starts_with(b"host:"))
         .ok_or_else(|| anyhow::anyhow!("No host"))?;
 
     let host = String::from_utf8_lossy(&host[5..]).trim().to_string();
-    Ok((host, n))
+    Ok(host)
 }

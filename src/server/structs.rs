@@ -18,7 +18,7 @@ pub enum TunnelRequest {
 pub type TunnelSender = AsyncSender<TunnelRequest>;
 
 pub struct InnerProxyState {
-    pub tunnels: HashMap<u128, TunnelSender>,
+    pub tunnels: HashMap<u128, (bool, TunnelSender)>,
     pub requests: HashMap<u128, Sender<TlsStream<TcpStream>>>,
     pub domains: HashMap<u64, (u128, String)>, // url(hashed) -> domain
 }
@@ -105,12 +105,12 @@ impl SharedProxyState {
         Ok(hash)
     }
 
-    pub async fn insert_tunnel_connector(&self, token: u128, tunnel: TunnelSender) {
+    pub async fn insert_tunnel_connector(&self, token: u128, tunnel: TunnelSender, own_ssl: bool) {
         let mut state = self.inner.write().await;
-        let old = state.tunnels.insert(token, tunnel);
+        let old = state.tunnels.insert(token, (own_ssl, tunnel));
 
         if let Some(old) = old {
-            _ = old.send(TunnelRequest::Close).await;
+            _ = old.1.send(TunnelRequest::Close).await;
         }
     }
 
@@ -129,7 +129,7 @@ impl SharedProxyState {
         state.domains.get(&url_hash).map(|x| x.0)
     }
 
-    pub async fn get_tunnel_entry(&self, token: u128) -> Option<TunnelSender> {
+    pub async fn get_tunnel_entry(&self, token: u128) -> Option<(bool, TunnelSender)> {
         let state = self.inner.read().await;
         state.tunnels.get(&token).cloned()
     }

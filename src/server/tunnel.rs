@@ -171,31 +171,27 @@ async fn handle_client(
     ssl: bool,
     acceptor: Arc<TlsAcceptor>,
 ) -> Result<()> {
-    let mut in_buffer = [0; 4096];
-    let (host, n) = get_host(&mut stream, &mut in_buffer, ssl).await?;
+    let host = get_host(&mut stream, ssl).await?;
     let tunn_res = get_host_tunnel(&state, &host).await;
     let own_ssl = tunn_res.as_ref().map(|x| x.0).unwrap_or(false);
 
     if ssl {
         if own_ssl {
-            handle_client_inner(stream, state, tunn_res, &host, &in_buffer[..n], true).await?;
+            handle_client_inner(stream, state, tunn_res, &host, true).await?;
         } else {
             let stream = acceptor.accept(stream).await?;
-            handle_client_inner(stream, state, tunn_res, &host, &in_buffer[..n], true).await?;
+            handle_client_inner(stream, state, tunn_res, &host, true).await?;
         }
     } else {
-        handle_client_inner(stream, state, tunn_res, &host, &in_buffer[..n], false).await?;
+        handle_client_inner(stream, state, tunn_res, &host, false).await?;
     }
 
     Ok(())
 }
 
-async fn get_host(
-    stream: &mut TcpStream,
-    in_buffer: &mut [u8],
-    ssl: bool,
-) -> Result<(String, usize)> {
-    let n = stream.read(in_buffer).await?;
+async fn get_host(stream: &mut TcpStream, ssl: bool) -> Result<String> {
+    let mut in_buffer = [0; 4096];
+    let n = stream.peek(&mut in_buffer).await?;
     let host = if ssl {
         qls_proto_utils::tls::sni::parse_sni(&in_buffer[..n])
             .ok_or_else(|| anyhow!("Server name not found in TLS initial handshake"))?
@@ -206,7 +202,7 @@ async fn get_host(
         host.to_owned()
     };
 
-    Ok((host, n))
+    Ok(host)
 }
 
 async fn handle_client_inner<T>(
@@ -214,14 +210,15 @@ async fn handle_client_inner<T>(
     state: SharedProxyState,
     tunn_res: TunnelGetResult,
     host: &str,
-    in_buffer: &[u8],
     ssl: bool,
 ) -> Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
     if state.is_host_panel(&host) {
-        serve_panel(&mut stream, &in_buffer, &state).await?;
+        let mut in_buffer = [0; 8192];
+        let n = stream.read(&mut in_buffer).await?;
+        serve_panel(&mut stream, &in_buffer[..n], &state).await?;
         return Ok(());
     }
 
@@ -262,7 +259,6 @@ where
         }
 
         let mut tunnel = tunnel_res??;
-        tunnel.write_all(&in_buffer).await?; // relay the first packet
         _ = tokio::io::copy_bidirectional(&mut stream, &mut tunnel).await;
         _ = tunnel.shutdown().await;
     }

@@ -76,10 +76,7 @@ async fn connector_handler(
         .await
         .ok_or_else(|| anyhow!("Cant find token!"))?;
 
-    let res = ::utils::parse_hello_packet(token, &connection_buff);
-    if let Err(e) = res {
-        return Err(e.into());
-    }
+    let own_ssl = ::utils::parse_hello_packet(token, &connection_buff)?;
 
     // im the connector!
     if connection_buff[0] == 0 {
@@ -94,7 +91,7 @@ async fn connector_handler(
         ::utils::send_string_to_stream(&mut stream, &domain).await?;
 
         let (tx, rx) = kanal::unbounded_async::<TunnelRequest>();
-        state.insert_tunnel_connector(token, tx).await;
+        state.insert_tunnel_connector(token, tx, own_ssl).await;
         let res = connector_loop(&mut stream, rx).await;
         if let Err(e) = res {
             tracing::error!("Connector loop: {e:?}");
@@ -169,36 +166,66 @@ async fn remote_listener(addr: SocketAddr, state: SharedProxyState, ssl: bool) -
 }
 
 async fn handle_client(
-    stream: TcpStream,
+    mut stream: TcpStream,
     state: SharedProxyState,
     ssl: bool,
     acceptor: Arc<TlsAcceptor>,
 ) -> Result<()> {
+    let mut in_buffer = [0; 4096];
+    let (host, n) = get_host(&mut stream, &mut in_buffer, ssl).await?;
+    let tunn_res = get_host_tunnel(&state, &host).await;
+    let own_ssl = tunn_res.as_ref().map(|x| x.0).unwrap_or(false);
+
     if ssl {
-        let stream = acceptor.accept(stream).await?;
-        handle_client_inner(stream, state, true).await?;
+        if own_ssl {
+            handle_client_inner(stream, state, tunn_res, &host, &in_buffer[..n], true).await?;
+        } else {
+            let stream = acceptor.accept(stream).await?;
+            handle_client_inner(stream, state, tunn_res, &host, &in_buffer[..n], true).await?;
+        }
     } else {
-        handle_client_inner(stream, state, false).await?;
+        handle_client_inner(stream, state, tunn_res, &host, &in_buffer[..n], false).await?;
     }
 
     Ok(())
 }
 
-async fn handle_client_inner<T>(mut stream: T, state: SharedProxyState, ssl: bool) -> Result<()>
+async fn get_host(
+    stream: &mut TcpStream,
+    in_buffer: &mut [u8],
+    ssl: bool,
+) -> Result<(String, usize)> {
+    let n = stream.read(in_buffer).await?;
+    let host = if ssl {
+        qls_proto_utils::tls::sni::parse_sni(&in_buffer[..n])
+            .ok_or_else(|| anyhow!("Server name not found in TLS initial handshake"))?
+    } else {
+        let host = ::utils::read_http_host(&in_buffer[..n])?;
+        let host = host.split(":").next().unwrap(); // remove port from host
+
+        host.to_owned()
+    };
+
+    Ok((host, n))
+}
+
+async fn handle_client_inner<T>(
+    mut stream: T,
+    state: SharedProxyState,
+    tunn_res: TunnelGetResult,
+    host: &str,
+    in_buffer: &[u8],
+    ssl: bool,
+) -> Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
-    let mut in_buffer = [0; 8192];
-
-    let (host, n) = ::utils::read_http_host(&mut stream, &mut in_buffer).await?;
-    let host = host.split(":").next().unwrap(); // remove port from host
-
     if state.is_host_panel(&host) {
-        serve_panel(&mut stream, in_buffer, n, &state).await?;
+        serve_panel(&mut stream, &in_buffer, &state).await?;
         return Ok(());
     }
 
-    if let Ok((tunn, _)) = get_tunn_or_error(&state, &host, &mut stream).await {
+    if let Ok(tunn) = get_tunn_or_error(tunn_res, &mut stream).await {
         let rng = state.consts.rng.secure_random;
         let mut generated_tunnel_id = [0u8; 16];
         rng.fill(&mut generated_tunnel_id).unwrap();
@@ -235,7 +262,7 @@ where
         }
 
         let mut tunnel = tunnel_res??;
-        tunnel.write_all(&in_buffer[..n]).await?; // relay the first packet
+        tunnel.write_all(&in_buffer).await?; // relay the first packet
         _ = tokio::io::copy_bidirectional(&mut stream, &mut tunnel).await;
         _ = tunnel.shutdown().await;
     }
@@ -244,15 +271,11 @@ where
     Ok(())
 }
 
-async fn get_tunn_or_error<T>(
-    state: &SharedProxyState,
-    host: &str,
-    stream: &mut T,
-) -> Result<(TunnelSender, u128)>
+async fn get_tunn_or_error<T>(tunn_res: TunnelGetResult, stream: &mut T) -> Result<TunnelSender>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
-    let tunn = match get_tunn(&state, &host).await {
+    let tunn = match tunn_res {
         Ok(tunn) => tunn,
         Err(TunnelError::TunnelDoesNotExist) => {
             _ = ::utils::http::write_raw_http_resp(
@@ -279,13 +302,11 @@ where
         }
     };
 
-    Ok(tunn)
+    Ok(tunn.1)
 }
 
-async fn get_tunn(
-    state: &SharedProxyState,
-    host: &str,
-) -> Result<(TunnelSender, u128), TunnelError> {
+pub type TunnelGetResult = Result<(bool, TunnelSender), TunnelError>;
+async fn get_host_tunnel(state: &SharedProxyState, host: &str) -> TunnelGetResult {
     let token = state
         .get_client_token(&host)
         .await
@@ -296,19 +317,14 @@ async fn get_tunn(
         .await
         .ok_or_else(|| TunnelError::NoConnectorForTunnel)?;
 
-    Ok((tunn, token))
+    Ok(tunn)
 }
 
-async fn serve_panel<T>(
-    stream: &mut T,
-    in_buffer: [u8; 8192],
-    n: usize,
-    state: &SharedProxyState,
-) -> Result<()>
+async fn serve_panel<T>(stream: &mut T, in_buffer: &[u8], state: &SharedProxyState) -> Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
-    let mut lines = in_buffer[..n].lines();
+    let mut lines = in_buffer.lines();
     let http_header = lines
         .next_line()
         .await?

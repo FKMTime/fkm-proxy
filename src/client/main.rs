@@ -33,6 +33,9 @@ struct Args {
 
     #[arg(short, long, action, env = "REDIRECT_SSL")]
     redirect_ssl: bool,
+
+    #[arg(long, action, env = "OWN_SSL")]
+    own_ssl: bool,
 }
 
 #[tokio::main]
@@ -66,7 +69,7 @@ async fn connector(args: &Args) -> Result<()> {
 
     let stream = TcpStream::connect(&args.proxy_addr).await?;
     let mut stream = acceptor.accept(stream).await?;
-    let mut hello_packet = generate_hello_packet(0, &args.token, &args.hash)?;
+    let mut hello_packet = generate_hello_packet(0, &args.token, &args.hash, args.own_ssl)?;
 
     stream.write_all(&hello_packet).await?;
     let nonssl_port = stream.read_u16().await?;

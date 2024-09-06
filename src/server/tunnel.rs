@@ -171,7 +171,11 @@ async fn handle_client(
     ssl: bool,
     acceptor: Arc<TlsAcceptor>,
 ) -> Result<()> {
-    let host = get_host(&mut stream, ssl).await?;
+    let host = match get_host(&mut stream, ssl).await {
+        Ok(host) => host,
+        Err(_) => return Ok(()),
+    };
+
     let tunn_res = get_host_tunnel(&state, &host).await;
     let own_ssl = tunn_res.as_ref().map(|x| x.0).unwrap_or(false);
 

@@ -92,7 +92,12 @@ impl SharedProxyState {
 
     pub async fn insert_client(&self, subdomain: &str, token: u128) -> anyhow::Result<u64> {
         let mut state = self.inner.write().await;
-        let url = format!("{}.{}", subdomain, self.consts.top_domain);
+        let url = if subdomain.contains('.') {
+            subdomain.to_string()
+        } else {
+            format!("{}.{}", subdomain, self.consts.top_domain)
+        };
+
         if state.domains.values().any(|x| x.1 == url) {
             return Err(anyhow::anyhow!("Domain already exists!"));
         }

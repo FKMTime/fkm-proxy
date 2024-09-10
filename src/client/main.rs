@@ -25,6 +25,9 @@ struct Args {
     #[arg(short, long, value_parser = parse_socketaddr, default_value = "127.0.0.1:80", env = "ADDR")]
     addr: SocketAddr,
 
+    #[arg(long, value_parser = parse_socketaddr, default_value = "127.0.0.1:80", env = "NON_SSL_ADDR")]
+    non_ssl_addr: Option<SocketAddr>,
+
     #[arg(long, env = "HASH")]
     hash: u64,
 
@@ -91,10 +94,11 @@ async fn connector(args: &Args) -> Result<()> {
 
         stream.read_exact(&mut buf).await?;
         let ssl = first_byte == 0x01;
+        let redirect_ssl = args.redirect_ssl;
 
         let addr = args.addr;
+        let non_ssl = args.non_ssl_addr.clone();
         let proxy_addr = args.proxy_addr;
-        let redirect_to_ssl = args.redirect_ssl && !ssl;
         let domain = domain.to_string();
         let acceptor = acceptor.clone();
         let requested_time = Instant::now();
@@ -104,8 +108,10 @@ async fn connector(args: &Args) -> Result<()> {
             let res = spawn_tunnel(
                 hello_packet,
                 addr,
+                non_ssl,
                 proxy_addr,
-                redirect_to_ssl,
+                redirect_ssl,
+                ssl,
                 ssl_port,
                 domain,
                 acceptor,
@@ -122,8 +128,10 @@ async fn connector(args: &Args) -> Result<()> {
 
 async fn spawn_tunnel(
     hello_packet: [u8; 80],
-    local_addr: SocketAddr,
+    local_ssl_addr: SocketAddr,
+    local_non_ssl_addr: Option<SocketAddr>,
     proxy_addr: SocketAddr,
+    ssl: bool,
     redirect_to_ssl: bool,
     ssl_port: u16,
     domain: String,
@@ -139,9 +147,15 @@ async fn spawn_tunnel(
     let mut tunnel_stream = acceptor.accept(tunnel_stream).await?;
     tunnel_stream.write_all(&hello_packet).await?;
 
+    let local_addr = match (ssl, local_non_ssl_addr.is_some()) {
+        (true, _) => local_ssl_addr,
+        (false, true) => local_non_ssl_addr.unwrap(),
+        (false, false) => local_ssl_addr,
+    };
     let mut local_stream = TcpStream::connect(local_addr).await?;
     local_stream.set_nodelay(true)?;
 
+    let redirect_to_ssl = redirect_to_ssl && !ssl && local_non_ssl_addr.is_none();
     if redirect_to_ssl {
         // for example: "GET / HTTP1.1"
         let mut buffer = [0u8; 1];

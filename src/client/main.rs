@@ -148,13 +148,6 @@ async fn spawn_tunnel(
     let mut tunnel_stream = acceptor.accept(tunnel_stream).await?;
     tunnel_stream.write_all(&hello_packet).await?;
 
-    let local_addr = match ssl {
-        true => settings.ssl_addr,
-        false => settings.nonssl_addr,
-    };
-    let mut local_stream = TcpStream::connect(local_addr).await?;
-    local_stream.set_nodelay(true)?;
-
     let redirect_to_ssl = settings.redirect_ssl && !ssl;
     if redirect_to_ssl {
         // for example: "GET / HTTP1.1"
@@ -173,11 +166,18 @@ async fn spawn_tunnel(
         let redirect = construct_http_redirect(&format!("https://{domain}{path}:{ssl_port}"));
         tunnel_stream.write_all(redirect.as_bytes()).await?;
     } else {
+        let local_addr = match ssl {
+            true => settings.ssl_addr,
+            false => settings.nonssl_addr,
+        };
+        let mut local_stream = TcpStream::connect(local_addr).await?;
+        local_stream.set_nodelay(true)?;
+
         _ = tokio::io::copy_bidirectional(&mut local_stream, &mut tunnel_stream).await;
+        _ = local_stream.shutdown().await;
     }
 
     _ = tunnel_stream.shutdown().await;
-    _ = local_stream.shutdown().await;
 
     Ok(())
 }

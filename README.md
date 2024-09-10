@@ -15,10 +15,12 @@ All traffic will be encrypted using your own ssl on your own local webserver (fk
 1. Add `CNAME` record to your domain pointing to `v1.filipton.space` (this is my primary proxy server)
 2. Generate certificate for your domain (using for example lets encrypt - with DNS verification)
 3. Setup your webserver to use that certificate (for example nginx)
-4. Use `--own-ssl` argument while running `fkm-proxy-client` and set `--addr` to your ssl ip:port (for example localhost:443).
+4. Pass `--ssl-addr` argument with ip:port to your webserver(https) (for example localhost:443)
 > [!IMPORTANT]
-> For now its not possible to use http without SSL while running with `--own-ssl` mode. Its bound to change in the future.
+> --ssl-addr isn't overwriting --addr, so you need to pass both addresses in that case
 
+> [!NOTE]
+> If you are using https redirection (from fkm-proxy-client binary), you also need to set `--addr` argument (you can set anything, it won't be used)
 
 ## Dev
 ### Server

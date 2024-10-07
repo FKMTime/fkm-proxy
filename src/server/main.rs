@@ -42,6 +42,9 @@ struct Args {
 
     #[arg(long)]
     generate_cert: bool,
+
+    #[arg(long, action, env = "HTTP3")]
+    http3: bool,
 }
 
 #[tokio::main]

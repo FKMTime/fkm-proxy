@@ -5,6 +5,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 pub mod certs;
 pub mod http;
+pub mod udp;
 
 pub fn parse_socketaddr(arg: &str) -> Result<SocketAddr> {
     let addrs = arg.to_socket_addrs()?;

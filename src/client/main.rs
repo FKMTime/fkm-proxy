@@ -36,6 +36,9 @@ struct Args {
 
     #[arg(short, long, action, env = "REDIRECT_SSL")]
     redirect_ssl: bool,
+
+    #[arg(long, action, env = "HTTP3")]
+    http3: bool,
 }
 
 #[derive(Debug)]
@@ -44,6 +47,7 @@ struct TunnelSettings {
     ssl_addr: SocketAddr,
     nonssl_addr: SocketAddr,
     redirect_ssl: bool,
+    http3: bool,
 }
 
 #[tokio::main]
@@ -108,6 +112,7 @@ async fn connector(args: &Args) -> Result<()> {
             ssl_addr: args.ssl_addr.unwrap_or(args.addr),
             nonssl_addr: args.addr,
             redirect_ssl: args.redirect_ssl,
+            http3: args.http3
         };
 
         hello_packet[26..42].copy_from_slice(&buf[0..16]);

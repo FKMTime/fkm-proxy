@@ -10,7 +10,7 @@ use tokio::{
 };
 
 type TunnelMapTest = Arc<RwLock<HashMap<SocketAddr, UnboundedSender<Vec<u8>>>>>;
-async fn server_test(
+pub async fn server_accept(
     listener: &Arc<UdpSocket>,
     recv_buf: &mut [u8],
     tunnel_map: &TunnelMapTest,
@@ -43,7 +43,7 @@ async fn server_test(
     }
 }
 
-struct UdpClient {
+pub struct UdpClient {
     tunnel_map: TunnelMapTest,
     rx: UnboundedReceiver<Vec<u8>>,
     addr: SocketAddr,
@@ -62,7 +62,7 @@ impl UdpClient {
         }
     }
 
-    pub async fn recv(&mut self) -> Option<Vec<u8>> {
+    async fn recv(&mut self) -> Option<Vec<u8>> {
         let timeout = tokio::time::timeout(Duration::from_secs(45), self.rx.recv()).await;
         match timeout {
             Ok(recv) => recv,

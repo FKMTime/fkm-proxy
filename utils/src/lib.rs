@@ -7,6 +7,64 @@ pub mod certs;
 pub mod http;
 pub mod udp;
 
+#[derive(Debug)]
+pub struct HelloPacket {
+    pub hp_type: HelloPacketType,
+    pub hash: u64,
+    pub token: u128,
+    pub own_ssl: bool,
+    pub tunnel_id: u128,
+}
+
+#[derive(Debug)]
+pub enum HelloPacketType {
+    Connector = 0,
+    Tunnel = 1,
+
+    Invalid,
+}
+
+impl HelloPacketType {
+    pub fn to_u8(&self) -> u8 {
+        match self {
+            HelloPacketType::Connector => 0,
+            HelloPacketType::Tunnel => 1,
+            HelloPacketType::Invalid => u8::MAX,
+        }
+    }
+
+    pub fn from_u8(val: u8) -> Self {
+        match val {
+            0 => HelloPacketType::Connector,
+            1 => HelloPacketType::Tunnel,
+            _ => HelloPacketType::Invalid,
+        }
+    }
+}
+
+impl HelloPacket {
+    pub fn to_buf(&self) -> [u8; 80] {
+        let mut tmp = [0; 80];
+        tmp[0] = self.hp_type.to_u8();
+        tmp[1..9].copy_from_slice(&self.hash.to_be_bytes());
+        tmp[10..26].copy_from_slice(&self.token.to_be_bytes());
+        tmp[26] = self.own_ssl as u8;
+        tmp[26..42].copy_from_slice(&self.tunnel_id.to_be_bytes());
+
+        tmp
+    }
+
+    pub fn from_buf(buf: &[u8; 80]) -> Self {
+        Self {
+            hp_type: HelloPacketType::from_u8(buf[0]),
+            hash: u64::from_be_bytes(buf[1..9].try_into().unwrap()),
+            token: u128::from_be_bytes(buf[10..26].try_into().unwrap()),
+            own_ssl: buf[26] != 0,
+            tunnel_id: u128::from_be_bytes(buf[26..42].try_into().unwrap()),
+        }
+    }
+}
+
 pub fn parse_socketaddr(arg: &str) -> Result<SocketAddr> {
     let addrs = arg.to_socket_addrs()?;
     for addr in addrs {
@@ -16,36 +74,6 @@ pub fn parse_socketaddr(arg: &str) -> Result<SocketAddr> {
     }
 
     Err(anyhow::anyhow!("No ipv4 socketaddr found!"))
-}
-
-pub fn generate_hello_packet(
-    connector_type: u8,
-    token: &u128,
-    hash: &u64,
-    own_ssl: bool,
-) -> Result<[u8; 80], HelloPacketError> {
-    let mut conn_buff = [0u8; 80];
-    conn_buff[0] = connector_type;
-    conn_buff[1..9].copy_from_slice(&hash.to_be_bytes());
-    conn_buff[10..26].copy_from_slice(&token.to_be_bytes());
-    conn_buff[26] = own_ssl as u8;
-
-    Ok(conn_buff)
-}
-
-pub fn parse_hello_packet(
-    token: u128,
-    connection_buff: &[u8; 80],
-) -> Result<bool, HelloPacketError> {
-    //let parsed_connector_type = connection_buff[0];
-    //let parsed_hash = u64::from_be_bytes(connection_buff[1..9].try_into()?);
-    let parsed_token = u128::from_be_bytes(connection_buff[10..26].try_into()?);
-
-    if parsed_token != token {
-        return Err(HelloPacketError::TokenMismatch);
-    }
-
-    Ok(connection_buff[26] != 0x00)
 }
 
 pub fn generate_string_packet(string: &str) -> Result<Vec<u8>> {

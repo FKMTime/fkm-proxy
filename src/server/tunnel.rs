@@ -76,7 +76,10 @@ async fn connector_handler(
         .await
         .ok_or_else(|| anyhow!("Cant find token!"))?;
 
-    let own_ssl = ::utils::parse_hello_packet(token, &connection_buff)?;
+    let hello_packet = ::utils::HelloPacket::from_buf(&connection_buff);
+    if hello_packet.token != token {
+        return Err(::utils::HelloPacketError::TokenMismatch.into());
+    }
 
     // im the connector!
     if connection_buff[0] == 0 {
@@ -91,7 +94,9 @@ async fn connector_handler(
         ::utils::send_string_to_stream(&mut stream, &domain).await?;
 
         let (tx, rx) = kanal::unbounded_async::<TunnelRequest>();
-        state.insert_tunnel_connector(token, tx, own_ssl).await;
+        state
+            .insert_tunnel_connector(token, tx, hello_packet.own_ssl)
+            .await;
         let res = connector_loop(&mut stream, rx).await;
         if let Err(e) = res {
             tracing::error!("Connector loop: {e:?}");

@@ -9,9 +9,8 @@ use tokio::{
 };
 use utils::{
     certs::{cert_from_str, key_from_str},
-    generate_hello_packet,
     http::construct_http_redirect,
-    parse_socketaddr, read_string_from_stream,
+    parse_socketaddr, read_string_from_stream, HelloPacket,
 };
 
 const MAX_REQUEST_TIME: u128 = 1000;
@@ -81,10 +80,16 @@ async fn connector(args: &Args) -> Result<()> {
 
     let stream = TcpStream::connect(&args.proxy_addr).await?;
     let mut stream = acceptor.accept(stream).await?;
-    let mut hello_packet =
-        generate_hello_packet(0, &args.token, &args.hash, args.ssl_addr.is_some())?;
 
-    stream.write_all(&hello_packet).await?;
+    let mut hello_packet = HelloPacket {
+        hp_type: utils::HelloPacketType::Connector,
+        token: args.token,
+        hash: args.hash,
+        own_ssl: args.ssl_addr.is_some(),
+        tunnel_id: 0,
+    };
+
+    stream.write_all(&hello_packet.to_buf()).await?;
     let nonssl_port = stream.read_u16().await?;
     let ssl_port = stream.read_u16().await?;
     let domain = read_string_from_stream(&mut stream).await?;
@@ -92,9 +97,8 @@ async fn connector(args: &Args) -> Result<()> {
         "Access through:\n - http://{domain}:{nonssl_port}\n - https://{domain}:{ssl_port}"
     );
 
-    hello_packet[0] = 0x01; // 0x01 - tunnel
+    hello_packet.hp_type = utils::HelloPacketType::Tunnel;
 
-    let mut buf = [0; 16];
     loop {
         let first_byte = stream.read_u8().await?;
         if first_byte == 0x69 {
@@ -102,7 +106,7 @@ async fn connector(args: &Args) -> Result<()> {
             continue; // ping/pong
         }
 
-        stream.read_exact(&mut buf).await?;
+        let tunnel_id = stream.read_u128().await?;
         let ssl = first_byte == 0x01;
         let domain = domain.to_string();
         let acceptor = acceptor.clone();
@@ -112,10 +116,11 @@ async fn connector(args: &Args) -> Result<()> {
             ssl_addr: args.ssl_addr.unwrap_or(args.addr),
             nonssl_addr: args.addr,
             redirect_ssl: args.redirect_ssl,
-            http3: args.http3
+            http3: args.http3,
         };
 
-        hello_packet[26..42].copy_from_slice(&buf[0..16]);
+        hello_packet.tunnel_id = tunnel_id;
+        let hello_packet = hello_packet.to_buf();
         tokio::task::spawn(async move {
             let res = spawn_tunnel(
                 hello_packet,

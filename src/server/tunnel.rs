@@ -7,6 +7,7 @@ use tokio::{
     net::{TcpListener, TcpStream},
 };
 use tokio_rustls::{client::TlsStream, rustls::pki_types, TlsAcceptor, TlsConnector};
+use utils::{ConnectorPacket, ConnectorPacketType, HelloPacket};
 
 const PANEL_HTML: &str = include_str!("./resources/index.html");
 const ERROR_HTML: &str = include_str!("./resources/error.html");
@@ -67,25 +68,27 @@ async fn connector_handler(
         .connect(pki_types::ServerName::try_from("proxy.lan")?, stream)
         .await?;
 
-    let mut connection_buff = [0u8; 80];
+    let mut connection_buff = [0u8; HelloPacket::buf_size()];
     stream.read_exact(&mut connection_buff).await?;
 
-    let url_hash: u64 = u64::from_be_bytes(connection_buff[1..9].try_into()?);
+    let hello_packet = ::utils::HelloPacket::from_buf(&connection_buff);
     let token = state
-        .get_token_by_url_hash(url_hash)
+        .get_token_by_url_hash(hello_packet.hash)
         .await
         .ok_or_else(|| anyhow!("Cant find token!"))?;
 
-    let hello_packet = ::utils::HelloPacket::from_buf(&connection_buff);
     if hello_packet.token != token {
         return Err(::utils::HelloPacketError::TokenMismatch.into());
     }
 
     // im the connector!
     if connection_buff[0] == 0 {
-        tracing::info!("Connector connected to url with hash: {url_hash}");
+        tracing::info!(
+            "Connector connected to url with hash: {}",
+            hello_packet.hash
+        );
         let domain = state
-            .get_domain_by_hash(url_hash)
+            .get_domain_by_hash(hello_packet.hash)
             .await
             .ok_or_else(|| anyhow!("Cant find domain!"))?;
 
@@ -105,9 +108,8 @@ async fn connector_handler(
         state.remove_tunnel(token).await;
     } else if connection_buff[0] == 1 {
         // im the tunnel!
-        let tunnel_id = u128::from_be_bytes(connection_buff[26..42].try_into().unwrap());
         let tx = state
-            .get_tunnel_oneshot(tunnel_id)
+            .get_tunnel_oneshot(hello_packet.tunnel_id)
             .await
             .ok_or_else(|| anyhow!("Cant find tunnel with that id (probably after timeout)!"))?;
 
@@ -129,8 +131,12 @@ async fn connector_loop(
                 match res {
                     TunnelRequest::Close => return Ok(()),
                     TunnelRequest::Request { ssl, tunnel_id } => {
-                        stream.write_u8(u8::from(ssl)).await?;
-                        stream.write_u128(tunnel_id).await?;
+                        stream.write_all(&ConnectorPacket {
+                            packet_type: ConnectorPacketType::TunnelRequest,
+                            tunnel_id,
+                            ssl,
+                            http3: false
+                        }.to_buf()).await?;
                     }
                 }
             }
@@ -140,7 +146,13 @@ async fn connector_loop(
                 }
             }
             _ = pinger.tick() => {
-                stream.write_u8(0x69).await?;
+                stream.write_all(&ConnectorPacket {
+                    packet_type: ConnectorPacketType::Ping,
+                    tunnel_id: 0,
+                    ssl: false,
+                    http3: false
+                }.to_buf()).await?;
+
                 let read = stream.read_u8().await?;
                 if read != 0x69 {
                     tracing::error!("Wrong pong response: {:x}", read);

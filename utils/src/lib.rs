@@ -16,7 +16,7 @@ pub struct HelloPacket {
     pub tunnel_id: u128,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum HelloPacketType {
     Connector = 0,
     Tunnel = 1,
@@ -43,13 +43,17 @@ impl HelloPacketType {
 }
 
 impl HelloPacket {
+    pub const fn buf_size() -> usize {
+        80
+    }
+
     pub fn to_buf(&self) -> [u8; 80] {
         let mut tmp = [0; 80];
         tmp[0] = self.hp_type.to_u8();
         tmp[1..9].copy_from_slice(&self.hash.to_be_bytes());
         tmp[10..26].copy_from_slice(&self.token.to_be_bytes());
         tmp[26] = self.own_ssl as u8;
-        tmp[26..42].copy_from_slice(&self.tunnel_id.to_be_bytes());
+        tmp[27..43].copy_from_slice(&self.tunnel_id.to_be_bytes());
 
         tmp
     }
@@ -60,7 +64,66 @@ impl HelloPacket {
             hash: u64::from_be_bytes(buf[1..9].try_into().unwrap()),
             token: u128::from_be_bytes(buf[10..26].try_into().unwrap()),
             own_ssl: buf[26] != 0,
-            tunnel_id: u128::from_be_bytes(buf[26..42].try_into().unwrap()),
+            tunnel_id: u128::from_be_bytes(buf[27..43].try_into().unwrap()),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum ConnectorPacketType {
+    Ping = 0,
+    TunnelRequest = 1,
+
+    Invalid,
+}
+
+impl ConnectorPacketType {
+    pub fn to_u8(&self) -> u8 {
+        match self {
+            ConnectorPacketType::Ping => 0,
+            ConnectorPacketType::TunnelRequest => 1,
+            ConnectorPacketType::Invalid => u8::MAX,
+        }
+    }
+
+    pub fn from_u8(val: u8) -> Self {
+        match val {
+            0 => ConnectorPacketType::Ping,
+            1 => ConnectorPacketType::TunnelRequest,
+            _ => ConnectorPacketType::Invalid,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ConnectorPacket {
+    pub packet_type: ConnectorPacketType,
+    pub tunnel_id: u128,
+    pub ssl: bool,
+    pub http3: bool,
+}
+
+impl ConnectorPacket {
+    pub const fn buf_size() -> usize {
+        20
+    }
+
+    pub fn to_buf(&self) -> [u8; 20] {
+        let mut tmp = [0; 20];
+        tmp[0] = self.packet_type.to_u8();
+        tmp[1..17].copy_from_slice(&self.tunnel_id.to_be_bytes());
+        tmp[17] = self.ssl as u8;
+        tmp[18] = self.http3 as u8;
+
+        tmp
+    }
+
+    pub fn from_buf(buf: &[u8; 20]) -> Self {
+        Self {
+            packet_type: ConnectorPacketType::from_u8(buf[0]),
+            tunnel_id: u128::from_be_bytes(buf[1..17].try_into().unwrap()),
+            ssl: buf[17] != 0,
+            http3: buf[18] != 0,
         }
     }
 }

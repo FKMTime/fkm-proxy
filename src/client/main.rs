@@ -10,7 +10,7 @@ use tokio::{
 use utils::{
     certs::{cert_from_str, key_from_str},
     http::construct_http_redirect,
-    parse_socketaddr, read_string_from_stream, HelloPacket,
+    parse_socketaddr, read_string_from_stream, ConnectorPacket, ConnectorPacketType, HelloPacket,
 };
 
 const MAX_REQUEST_TIME: u128 = 1000;
@@ -99,15 +99,16 @@ async fn connector(args: &Args) -> Result<()> {
 
     hello_packet.hp_type = utils::HelloPacketType::Tunnel;
 
+    let mut buf = [0; ConnectorPacket::buf_size()];
     loop {
-        let first_byte = stream.read_u8().await?;
-        if first_byte == 0x69 {
+        stream.read_exact(&mut buf).await?;
+        let packet = ConnectorPacket::from_buf(&buf);
+
+        if packet.packet_type == ConnectorPacketType::Ping {
             stream.write_u8(0x69).await?;
             continue; // ping/pong
         }
 
-        let tunnel_id = stream.read_u128().await?;
-        let ssl = first_byte == 0x01;
         let domain = domain.to_string();
         let acceptor = acceptor.clone();
         let requested_time = Instant::now();
@@ -119,13 +120,13 @@ async fn connector(args: &Args) -> Result<()> {
             http3: args.http3,
         };
 
-        hello_packet.tunnel_id = tunnel_id;
+        hello_packet.tunnel_id = packet.tunnel_id;
         let hello_packet = hello_packet.to_buf();
         tokio::task::spawn(async move {
             let res = spawn_tunnel(
                 hello_packet,
                 settings,
-                ssl,
+                packet.ssl,
                 ssl_port,
                 domain,
                 acceptor,

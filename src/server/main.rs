@@ -25,6 +25,12 @@ struct Args {
     #[arg(long, value_parser = parse_socketaddr, default_value = "127.0.0.1:443", env = "BIND_SSL")]
     bind_ssl: SocketAddr,
 
+    #[arg(env = "DISPLAY_SSL_PORT")]
+    display_ssl_port: Option<u16>,
+
+    #[arg(env = "DISPLAY_NONSSL_PORT")]
+    display_nonssl_port: Option<u16>,
+
     #[arg(long, value_parser = parse_socketaddr, default_value = "0.0.0.0:6969", env = "BIND_CONNECTOR")]
     bind_connector: SocketAddr,
 
@@ -84,8 +90,8 @@ async fn main() -> Result<()> {
         args.panel_domain.unwrap_or(args.domain),
         args.save_path,
         args.tunnel_timeout,
-        args.bind_nonssl.port(),
-        args.bind_ssl.port(),
+        args.display_nonssl_port.unwrap_or(args.bind_nonssl.port()),
+        args.display_ssl_port.unwrap_or(args.bind_ssl.port()),
     );
 
     _ = shared_proxy_state.load_domains().await;

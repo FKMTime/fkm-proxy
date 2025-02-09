@@ -216,6 +216,7 @@ async fn get_host(stream: &mut TcpStream, ssl: bool) -> Result<String> {
     let host = if ssl {
         qls_proto_utils::tls::sni::parse_sni(&in_buffer[..n])
             .ok_or_else(|| anyhow!("Server name not found in TLS initial handshake"))?
+            .to_string()
     } else {
         let host = ::utils::read_http_host(&in_buffer[..n])?;
         let host = host.split(":").next().unwrap(); // remove port from host

@@ -1,4 +1,4 @@
-FROM rust:1.77-alpine AS proxy-builder
+FROM rust:1.84-alpine AS proxy-builder
 RUN apk add --no-cache musl-dev
 
 WORKDIR /build

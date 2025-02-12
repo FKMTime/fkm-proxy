@@ -1,5 +1,8 @@
 use anyhow::Result;
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::{
+    net::{SocketAddr, ToSocketAddrs},
+    time::Duration,
+};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
@@ -129,10 +132,21 @@ impl ConnectorPacket {
 }
 
 pub fn parse_socketaddr(arg: &str) -> Result<SocketAddr> {
-    let addrs = arg.to_socket_addrs()?;
-    for addr in addrs {
-        if addr.is_ipv4() {
-            return Ok(addr);
+    for i in 0..10 {
+        let res = arg.to_socket_addrs();
+
+        match res {
+            Ok(addrs) => {
+                for addr in addrs {
+                    if addr.is_ipv4() {
+                        return Ok(addr);
+                    }
+                }
+            }
+            Err(e) => {
+                println!("[clap parse_socketaddr] (Try: {}) {e:?}", i + 1);
+                std::thread::sleep(Duration::from_millis(5000));
+            }
         }
     }
 

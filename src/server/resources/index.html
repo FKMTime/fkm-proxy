@@ -4,48 +4,299 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PROXY PANEL</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        }
+
+        body {
+            min-height: 100vh;
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem;
+        }
+
+        .container {
+            background: white;
+            padding: 2.5rem;
+            border-radius: 1rem;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+            width: 100%;
+            max-width: 500px;
+        }
+
+        h1 {
+            color: #2d3748;
+            font-size: 1.8rem;
+            margin-bottom: 2rem;
+            text-align: center;
+            font-weight: 700;
+        }
+
+        .form {
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        label {
+            color: #4a5568;
+            font-size: 0.95rem;
+            font-weight: 500;
+        }
+
+        input[type="text"] {
+            padding: 0.75rem 1rem;
+            border: 2px solid #e2e8f0;
+            border-radius: 0.5rem;
+            font-size: 1rem;
+            transition: all 0.3s ease;
+        }
+
+        input[type="text"]:focus {
+            outline: none;
+            border-color: #4299e1;
+            box-shadow: 0 0 0 3px rgba(66, 153, 225, 0.15);
+        }
+
+        button {
+            background: #4299e1;
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.5rem;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        button:hover {
+            background: #3182ce;
+            transform: translateY(-1px);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        /* Modal Styles */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+
+        .modal.show {
+            display: flex;
+        }
+
+        .modal-content {
+            background: white;
+            padding: 2.5rem;
+            border-radius: 1rem;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+            max-width: 90%;
+            width: 600px;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+        }
+
+        .modal-title {
+            font-size: 1.4rem;
+            font-weight: 600;
+            color: #2d3748;
+        }
+
+        .modal-title.error {
+            color: #e53e3e;
+        }
+
+        .close-button {
+            background: none;
+            border: none;
+            color: #718096;
+            font-size: 1.5rem;
+            cursor: pointer;
+            padding: 0.5rem;
+        }
+
+        .credentials {
+            background: #f7fafc;
+            padding: 1.5rem;
+            border-radius: 0.5rem;
+            font-family: monospace;
+            margin-bottom: 1rem;
+            white-space: pre;
+            font-size: 1.1rem;
+            line-height: 1.5;
+            overflow-x: auto;
+        }
+
+        .error-message {
+            background: #fff5f5;
+            border: 1px solid #feb2b2;
+            color: #c53030;
+            padding: 1.5rem;
+            border-radius: 0.5rem;
+            margin-bottom: 1rem;
+            font-size: 1.1rem;
+            line-height: 1.5;
+        }
+
+        .copy-button {
+            width: 100%;
+            margin-top: 1rem;
+            background: #48bb78;
+            padding: 1rem 1.5rem;
+        }
+
+        .copy-button:hover {
+            background: #38a169;
+        }
+
+        .success-message {
+            color: #48bb78;
+            text-align: center;
+            margin-top: 0.5rem;
+            font-size: 0.9rem;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .success-message.show {
+            opacity: 1;
+        }
+
+        .error-modal .modal-content {
+            border-top: 4px solid #e53e3e;
+        }
+
+        .error-modal .close-button {
+            color: #e53e3e;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Proxy Panel</h1>
+        <form onsubmit="createTunnel(); return false;" class="form">
+            <div class="form-group">
+                <label for="url">Target URL</label>
+                <input 
+                    type="text" 
+                    id="url" 
+                    placeholder="https://example.com"
+                    required
+                >
+            </div>
+            <button type="submit">Create Tunnel</button>
+        </form>
+    </div>
+
+    <!-- Success Modal -->
+    <div class="modal" id="credentialsModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="modal-title">Tunnel Created Successfully</div>
+                <button class="close-button" onclick="closeModal('credentialsModal')">&times;</button>
+            </div>
+            <div class="credentials" id="credentialsText"></div>
+            <button class="copy-button" onclick="copyCredentials()">Copy Credentials</button>
+            <div class="success-message" id="successMessage">Copied to clipboard!</div>
+        </div>
+    </div>
+
+    <!-- Error Modal -->
+    <div class="modal error-modal" id="errorModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="modal-title error">Error Creating Tunnel</div>
+                <button class="close-button" onclick="closeModal('errorModal')">&times;</button>
+            </div>
+            <div class="error-message" id="errorText"></div>
+        </div>
+    </div>
 
     <script>
+        const credentialsModal = document.getElementById('credentialsModal');
+        const errorModal = document.getElementById('errorModal');
+        const credentialsText = document.getElementById('credentialsText');
+        const errorText = document.getElementById('errorText');
+        const successMessage = document.getElementById('successMessage');
+
         async function createTunnel() {
             const url = document.getElementById('url').value;
-
             try {
                 let response = await fetch(`/create?url=${url}`, {
                     method: 'POST',
                 });
-
-                let json = response = await response.json();
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                let json = await response.json();
                 let hash = json.hash;
                 let token = json.token;
-
-                //alert(`Tunnel created successfully.\n\nHASH=${hash}\nTOKEN=${token}`);
-                prompt(`Tunnel created successfully. ${hash} ${token}`, `HASH=${hash}\nTOKEN=${token}`);
-                console.log(json);
+                
+                credentialsText.textContent = `HASH=${hash}\nTOKEN=${token}`;
+                showModal('credentialsModal');
             } catch (error) {
-                alert('Error creating tunnel');
+                errorText.textContent = `Failed to create tunnel: ${error.message}`;
+                showModal('errorModal');
+            }
+        }
+
+        function showModal(modalId) {
+            document.getElementById(modalId).classList.add('show');
+        }
+
+        function closeModal(modalId) {
+            document.getElementById(modalId).classList.remove('show');
+            if (modalId === 'credentialsModal') {
+                successMessage.classList.remove('show');
+            }
+        }
+
+        async function copyCredentials() {
+            try {
+                await navigator.clipboard.writeText(credentialsText.textContent);
+                successMessage.classList.add('show');
+                setTimeout(() => {
+                    successMessage.classList.remove('show');
+                }, 2000);
+            } catch (err) {
+                errorText.textContent = 'Failed to copy credentials to clipboard';
+                showModal('errorModal');
             }
         }
     </script>
-
-<style>
-    .form {
-        display: flex;
-        flex-direction: column;
-        width: 50%;
-        margin: 0 auto;
-    }
-
-    .center {
-        text-align: center;
-    }
-</style>
-</head>
-<body>
-    <h1 class="center">PROXY PANEL</h1>
-    <form onsubmit="createTunnel(); return false;" class="form">
-        <label class="center" for="url">Enter URL</label>
-        <input type="text" id="url" placeholder="Enter URL">
-        <input type="submit" value="Fetch Data">
-    </form>
 </body>
 </html>

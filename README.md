@@ -12,7 +12,7 @@ Simple yet powerful proxy for http(s) traffic (can also handle websockets).
 While doing this, proxy server won't be able to see any plain-text traffic from and to your client.
 All traffic will be encrypted using your own ssl on your own local webserver (fkm-proxy-client isn't using your generated cert).
 
-1. Add `CNAME` record to your domain pointing to `v1.filipton.space` (this is my primary proxy server)
+1. Add `CNAME` record to your domain pointing to `vps.filipton.space` (this is my primary proxy server)
 2. Generate certificate for your domain (using for example lets encrypt - with DNS verification)
 3. Setup your webserver to use that certificate (for example nginx)
 4. Pass `--ssl-addr` argument with ip:port to your webserver(https) (for example localhost:443)
@@ -26,7 +26,7 @@ All traffic will be encrypted using your own ssl on your own local webserver (fk
 ### Server
 To run dev server use this command (with local ssl cert generation):
 ```bash
-cargo run --bin fkm-proxy-server -- --domain testlocal.filipton.space --generate-cert --bind-ssl 0.0.0.0:8080 --bin-nonssl 0.0.0.0:8443
+BIND_NONSSL=0.0.0.0:8080 BIND_SSL=0.0.0.0:8443 cargo run --bin fkm-proxy-server -- --domain testlocal.filipton.space --generate-cert
 ```
 
 > [!NOTE]

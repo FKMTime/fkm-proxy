@@ -9,7 +9,7 @@ use tokio::{
 };
 use utils::{
     certs::{cert_from_str, key_from_str},
-    http::construct_http_redirect,
+    http::{construct_http_redirect, construct_http_resp},
     parse_socketaddr, read_string_from_stream, ConnectorPacket, ConnectorPacketType, HelloPacket,
 };
 
@@ -195,14 +195,24 @@ async fn spawn_tunnel(
             true => settings.ssl_addr,
             false => settings.nonssl_addr,
         };
-        let mut local_stream = TcpStream::connect(local_addr).await?;
-        local_stream.set_nodelay(true)?;
 
+        let Ok(mut local_stream) = TcpStream::connect(local_addr).await else {
+            let resp = construct_http_resp(
+                500,
+                "Internval Server Error",
+                "<h1>Local server not running (behind proxy)</h1> TODO: change this msg",
+            );
+            tunnel_stream.write_all(resp.as_bytes()).await?;
+            _ = tunnel_stream.shutdown().await;
+
+            return Ok(());
+        };
+
+        local_stream.set_nodelay(true)?;
         _ = tokio::io::copy_bidirectional(&mut local_stream, &mut tunnel_stream).await;
         _ = local_stream.shutdown().await;
     }
 
     _ = tunnel_stream.shutdown().await;
-
     Ok(())
 }

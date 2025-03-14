@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use clap::{command, Parser};
 use rcgen::CertifiedKey;
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -99,45 +99,59 @@ async fn connector(args: &Args) -> Result<()> {
 
     hello_packet.hp_type = utils::HelloPacketType::Tunnel;
 
+    let mut last_ping = tokio::time::interval_at(
+        Instant::now() + Duration::from_secs(30),
+        Duration::from_secs(30),
+    );
+
     let mut buf = [0; ConnectorPacket::buf_size()];
     loop {
-        stream.read_exact(&mut buf).await?;
-        let packet = ConnectorPacket::from_buf(&buf);
+        tokio::select! {
+            _ = stream.read_exact(&mut buf) => {
+                let packet = ConnectorPacket::from_buf(&buf);
 
-        if packet.packet_type == ConnectorPacketType::Ping {
-            stream.write_u8(0x69).await?;
-            continue; // ping/pong
-        }
+                if packet.packet_type == ConnectorPacketType::Ping {
+                    stream.write_u8(0x69).await?;
+                    last_ping.reset();
 
-        let domain = domain.to_string();
-        let acceptor = acceptor.clone();
-        let requested_time = Instant::now();
-        let settings = TunnelSettings {
-            proxy_addr: args.proxy_addr,
-            ssl_addr: args.ssl_addr.unwrap_or(args.addr),
-            nonssl_addr: args.addr,
-            redirect_ssl: args.redirect_ssl,
-            http3: args.http3,
-        };
+                    continue; // ping/pong
+                }
 
-        hello_packet.tunnel_id = packet.tunnel_id;
-        let hello_packet = hello_packet.to_buf();
-        tokio::task::spawn(async move {
-            let res = spawn_tunnel(
-                hello_packet,
-                settings,
-                packet.ssl,
-                ssl_port,
-                domain,
-                acceptor,
-                requested_time,
-            )
-            .await;
+                let domain = domain.to_string();
+                let acceptor = acceptor.clone();
+                let requested_time = Instant::now();
+                let settings = TunnelSettings {
+                    proxy_addr: args.proxy_addr,
+                    ssl_addr: args.ssl_addr.unwrap_or(args.addr),
+                    nonssl_addr: args.addr,
+                    redirect_ssl: args.redirect_ssl,
+                    http3: args.http3,
+                };
 
-            if let Err(e) = res {
-                tracing::error!("Tunnel Error: {e}");
+                hello_packet.tunnel_id = packet.tunnel_id;
+                let hello_packet = hello_packet.to_buf();
+                tokio::task::spawn(async move {
+                    let res = spawn_tunnel(
+                        hello_packet,
+                        settings,
+                        packet.ssl,
+                        ssl_port,
+                        domain,
+                        acceptor,
+                        requested_time,
+                    )
+                        .await;
+
+                    if let Err(e) = res {
+                        tracing::error!("Tunnel Error: {e}");
+                    }
+                });
             }
-        });
+            _ = last_ping.tick() => {
+                tracing::error!("No ping for 30s! Closing connector");
+                return Ok(());
+            }
+        }
     }
 }
 

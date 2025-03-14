@@ -156,6 +156,8 @@ async fn connector_loop(
                 let read = stream.read_u8().await?;
                 if read != 0x69 {
                     tracing::error!("Wrong pong response: {:x}", read);
+                    _ = stream.shutdown().await;
+                    return Ok(());
                 }
             }
         }

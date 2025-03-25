@@ -14,6 +14,7 @@ use utils::{
 };
 
 const MAX_REQUEST_TIME: u128 = 1000;
+const ERROR_HTML: &str = include_str!("./resources/error.html");
 
 #[derive(Parser, Debug, Clone)]
 #[command(version, about, long_about = None)]
@@ -27,9 +28,6 @@ struct Args {
     #[arg(long, value_parser = parse_socketaddr, env = "SSL_ADDR")]
     ssl_addr: Option<SocketAddr>,
 
-    #[arg(long, env = "HASH")]
-    hash: u64,
-
     #[arg(short, long, env = "TOKEN")]
     token: u128,
 
@@ -41,6 +39,7 @@ struct Args {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 struct TunnelSettings {
     proxy_addr: SocketAddr,
     ssl_addr: SocketAddr,
@@ -84,7 +83,6 @@ async fn connector(args: &Args) -> Result<()> {
     let mut hello_packet = HelloPacket {
         hp_type: utils::HelloPacketType::Connector,
         token: args.token,
-        hash: args.hash,
         own_ssl: args.ssl_addr.is_some(),
         tunnel_id: 0,
     };
@@ -200,7 +198,7 @@ async fn spawn_tunnel(
             let resp = construct_http_resp(
                 500,
                 "Internval Server Error",
-                "<h1>Local server not running (behind proxy)</h1> TODO: change this msg",
+                &ERROR_HTML.replace("{MSG}", "Local server not running!"),
             );
             tunnel_stream.write_all(resp.as_bytes()).await?;
             _ = tunnel_stream.shutdown().await;

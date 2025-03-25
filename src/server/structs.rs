@@ -1,4 +1,3 @@
-use highway::{HighwayHash, HighwayHasher};
 use kanal::AsyncSender;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
@@ -20,7 +19,7 @@ pub type TunnelSender = AsyncSender<TunnelRequest>;
 pub struct InnerProxyState {
     pub tunnels: HashMap<u128, (bool, TunnelSender)>,
     pub requests: HashMap<u128, Sender<TlsStream<TcpStream>>>,
-    pub domains: HashMap<u64, (u128, String)>, // url(hashed) -> domain
+    pub domains: HashMap<String, u128>, // domain -> token
 }
 
 pub struct ConstProxyState {
@@ -80,17 +79,17 @@ impl SharedProxyState {
         }
     }
 
-    pub async fn generate_new_client(&self, subdomain: &str) -> anyhow::Result<(u64, u128)> {
+    pub async fn generate_new_client(&self, subdomain: &str) -> anyhow::Result<u128> {
         let rng = self.consts.rng.secure_random;
         let mut token = [0u8; 16];
         rng.fill(&mut token).unwrap();
         let token = u128::from_be_bytes(token);
 
-        let url_hash = self.insert_client(subdomain, token).await?;
-        Ok((url_hash, token))
+        self.insert_client(subdomain, token).await?;
+        Ok(token)
     }
 
-    pub async fn insert_client(&self, subdomain: &str, token: u128) -> anyhow::Result<u64> {
+    pub async fn insert_client(&self, subdomain: &str, token: u128) -> anyhow::Result<()> {
         let mut state = self.inner.write().await;
         let url = if subdomain.contains('.') {
             subdomain.to_string()
@@ -98,16 +97,15 @@ impl SharedProxyState {
             format!("{}.{}", subdomain, self.consts.top_domain)
         };
 
-        if state.domains.values().any(|x| x.1 == url) {
+        if state.domains.contains_key(&url) {
             return Err(anyhow::anyhow!("Domain already exists!"));
         }
 
-        let hash = HighwayHasher::default().hash64(url.as_bytes());
-        state.domains.insert(hash, (token, url));
+        state.domains.insert(url, token);
         drop(state);
 
         self.save_domains().await?;
-        Ok(hash)
+        Ok(())
     }
 
     pub async fn insert_tunnel_connector(&self, token: u128, tunnel: TunnelSender, own_ssl: bool) {
@@ -121,17 +119,11 @@ impl SharedProxyState {
 
     pub async fn get_client_token(&self, url: &str) -> Option<u128> {
         let state = self.inner.read().await;
-        let hash = HighwayHasher::default().hash64(url.as_bytes());
-        state.domains.get(&hash).map(|x| x.0)
+        state.domains.get(url).copied()
     }
 
     pub async fn get_tunnel_timeout(&self) -> u64 {
         self.consts.tunnel_timeout
-    }
-
-    pub async fn get_token_by_url_hash(&self, url_hash: u64) -> Option<u128> {
-        let state = self.inner.read().await;
-        state.domains.get(&url_hash).map(|x| x.0)
     }
 
     pub async fn get_tunnel_entry(&self, token: u128) -> Option<(bool, TunnelSender)> {
@@ -165,9 +157,15 @@ impl SharedProxyState {
         self.consts.tls_connector.clone()
     }
 
-    pub async fn get_domain_by_hash(&self, hash: u64) -> Option<String> {
+    pub async fn get_domain_by_token(&self, token: u128) -> Option<String> {
         let state = self.inner.read().await;
-        state.domains.get(&hash).map(|x| x.1.clone())
+        state
+            .domains
+            .iter()
+            .enumerate()
+            .find(|(_, (_, v))| **v == token)
+            .map(|(_, (k, _))| k)
+            .cloned()
     }
 
     #[inline(always)]
@@ -211,5 +209,5 @@ pub enum TunnelError {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SavedDomains {
-    pub domains: HashMap<u64, (u128, String)>,
+    pub domains: HashMap<String, u128>,
 }

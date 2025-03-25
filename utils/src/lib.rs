@@ -13,7 +13,7 @@ pub mod udp;
 #[derive(Debug)]
 pub struct HelloPacket {
     pub hp_type: HelloPacketType,
-    pub hash: u64,
+    //pub hash: u64,
     pub token: u128,
     pub own_ssl: bool,
     pub tunnel_id: u128,
@@ -53,7 +53,7 @@ impl HelloPacket {
     pub fn to_buf(&self) -> [u8; 80] {
         let mut tmp = [0; 80];
         tmp[0] = self.hp_type.to_u8();
-        tmp[1..9].copy_from_slice(&self.hash.to_be_bytes());
+        //tmp[1..9].copy_from_slice(&self.hash.to_be_bytes());
         tmp[10..26].copy_from_slice(&self.token.to_be_bytes());
         tmp[26] = self.own_ssl as u8;
         tmp[27..43].copy_from_slice(&self.tunnel_id.to_be_bytes());
@@ -64,7 +64,7 @@ impl HelloPacket {
     pub fn from_buf(buf: &[u8; 80]) -> Self {
         Self {
             hp_type: HelloPacketType::from_u8(buf[0]),
-            hash: u64::from_be_bytes(buf[1..9].try_into().unwrap()),
+            //hash: u64::from_be_bytes(buf[1..9].try_into().unwrap()),
             token: u128::from_be_bytes(buf[10..26].try_into().unwrap()),
             own_ssl: buf[26] != 0,
             tunnel_id: u128::from_be_bytes(buf[27..43].try_into().unwrap()),

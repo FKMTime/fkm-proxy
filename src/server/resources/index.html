@@ -263,10 +263,9 @@
                 }
                 
                 let json = await response.json();
-                let hash = json.hash;
                 let token = json.token;
                 
-                credentialsText.textContent = `HASH=${hash}\nTOKEN=${token}`;
+                credentialsText.textContent = `TOKEN=${token}`;
                 showModal('credentialsModal');
             } catch (error) {
                 errorText.textContent = `Failed to create tunnel: ${error.message}`;

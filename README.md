@@ -42,17 +42,17 @@ curl -X POST http://testlocal.filipton.space:8080/create?url=test
 
 It will return something like this:
 ```json
-{"url":"test","hash":"10426308271401697964","token":"178744005062729538121086180162812072708"}
+{"url":"test","token":"178744005062729538121086180162812072708"}
 ```
 
 
 ### Client
 To run client (using custom proxy server) use this command:
 ```bash
-cargo run --bin fkm-proxy-client -- --hash 10426308271401697964 --token 178744005062729538121086180162812072708 -a 127.0.0.1:5000 -p localhost:6969
+cargo run --bin fkm-proxy-client -- --token 178744005062729538121086180162812072708 -a 127.0.0.1:5000 -p localhost:6969
 ```
 > [!NOTE]  
-> Change your `HASH` and `TOKEN` to values previously generated on server.
+> Change your `TOKEN` to values previously generated on server.
 
 > [!IMPORTANT]
 > You can specify Proxy ip using `-p` argument (by default proxy server is running on port 6969)

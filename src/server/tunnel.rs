@@ -72,25 +72,14 @@ async fn connector_handler(
     stream.read_exact(&mut connection_buff).await?;
 
     let hello_packet = ::utils::HelloPacket::from_buf(&connection_buff);
-    let token = state
-        .get_token_by_url_hash(hello_packet.hash)
+    let domain = state
+        .get_domain_by_token(hello_packet.token)
         .await
-        .ok_or_else(|| anyhow!("Cant find token!"))?;
-
-    if hello_packet.token != token {
-        return Err(::utils::HelloPacketError::TokenMismatch.into());
-    }
+        .ok_or_else(|| utils::HelloPacketError::TokenMismatch)?;
 
     // im the connector!
     if connection_buff[0] == 0 {
-        tracing::info!(
-            "Connector connected to url with hash: {}",
-            hello_packet.hash
-        );
-        let domain = state
-            .get_domain_by_hash(hello_packet.hash)
-            .await
-            .ok_or_else(|| anyhow!("Cant find domain!"))?;
+        tracing::info!("Connector connected to url with domain: {domain}");
 
         stream.write_u16(state.consts.nonssl_port).await?;
         stream.write_u16(state.consts.ssl_port).await?;
@@ -98,14 +87,15 @@ async fn connector_handler(
 
         let (tx, rx) = kanal::unbounded_async::<TunnelRequest>();
         state
-            .insert_tunnel_connector(token, tx, hello_packet.own_ssl)
+            .insert_tunnel_connector(hello_packet.token, tx, hello_packet.own_ssl)
             .await;
+
         let res = connector_loop(&mut stream, rx).await;
         if let Err(e) = res {
             tracing::error!("Connector loop: {e:?}");
         }
 
-        state.remove_tunnel(token).await;
+        state.remove_tunnel(hello_packet.token).await;
     } else if connection_buff[0] == 1 {
         // im the tunnel!
         let tx = state
@@ -302,7 +292,7 @@ where
                 stream,
                 404,
                 "NOT FOUND",
-                &ERROR_HTML.replace("{MSG}", "That tunnel does not exists!"),
+                &ERROR_HTML.replace("{MSG}", "This tunnel does not exists!"),
             )
             .await;
             anyhow::bail!("Tunnel does not exist!");
@@ -364,13 +354,9 @@ where
             .collect();
 
         let url = search.get("url").ok_or_else(|| anyhow!("No url!"))?;
-        let (hash, token) = state.generate_new_client(*url).await?;
+        let token = state.generate_new_client(*url).await?;
 
-        let body = format!(
-            "{{\"url\":\"{}\",\"hash\":\"{}\",\"token\":\"{}\"}}",
-            url, hash, token
-        );
-
+        let body = format!("{{\"url\":\"{}\",\"token\":\"{}\"}}", url, token);
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
             body.len(),

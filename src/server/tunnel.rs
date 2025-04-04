@@ -96,6 +96,7 @@ async fn connector_handler(
         }
 
         state.remove_tunnel(hello_packet.token).await;
+        _ = stream.get_mut().0.shutdown().await;
     } else if connection_buff[0] == 1 {
         // im the tunnel!
         let tx = state

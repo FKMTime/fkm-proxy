@@ -258,7 +258,7 @@ where
         if let Err(_) = tunnel_res {
             _ = state.get_tunnel_oneshot(generated_tunnel_id).await;
 
-            _ = ::utils::http::write_raw_http_resp(
+            _ = ::utils::http::write_http_resp(
                 &mut stream,
                 404,
                 "NOT FOUND",
@@ -266,6 +266,7 @@ where
                     "{MSG}",
                     &format!("Tunnel timeout! REF ID: {generated_tunnel_id}"),
                 ),
+                "text/html",
             )
             .await;
             tracing::error!("Tunnel timeout (REF ID: {generated_tunnel_id})");
@@ -289,21 +290,23 @@ where
     let tunn = match tunn_res {
         Ok(tunn) => tunn,
         Err(TunnelError::TunnelDoesNotExist) => {
-            _ = ::utils::http::write_raw_http_resp(
+            _ = ::utils::http::write_http_resp(
                 stream,
                 404,
                 "NOT FOUND",
                 &ERROR_HTML.replace("{MSG}", "This tunnel does not exists!"),
+                "text/html",
             )
             .await;
             anyhow::bail!("Tunnel does not exist!");
         }
         Err(TunnelError::NoConnectorForTunnel) => {
-            _ = ::utils::http::write_raw_http_resp(
+            _ = ::utils::http::write_http_resp(
                 stream,
                 404,
                 "NOT FOUND",
                 &ERROR_HTML.replace("{MSG}", "Connector for this tunnel isn't connected!"),
+                "text/html",
             )
             .await;
             anyhow::bail!("No connector for tunnel!");
@@ -366,13 +369,14 @@ where
 
         stream.write_all(response.as_bytes()).await?;
     } else if http_header[1] == "/" && http_header[0] == "GET" {
-        _ = ::utils::http::write_raw_http_resp(stream, 200, "OK", PANEL_HTML).await;
+        _ = ::utils::http::write_http_resp(stream, 200, "OK", PANEL_HTML, "text/html").await;
     } else {
-        _ = ::utils::http::write_raw_http_resp(
+        _ = ::utils::http::write_http_resp(
             stream,
             404,
             "NOT FOUND",
             "That page does not exists!",
+            "text/html",
         )
         .await;
         return Ok(());

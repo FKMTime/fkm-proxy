@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use clap::{command, Parser};
 use rcgen::CertifiedKey;
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -9,7 +9,9 @@ use tokio::{
 };
 use utils::{
     certs::{cert_from_str, key_from_str},
-    http::{construct_http_redirect, construct_http_resp},
+    http::{
+        construct_http_redirect, construct_raw_http_resp, write_http_resp,
+    },
     parse_socketaddr, read_string_from_stream, ConnectorPacket, ConnectorPacketType, HelloPacket,
 };
 
@@ -36,6 +38,9 @@ struct Args {
 
     #[arg(long, action, env = "HTTP3")]
     http3: bool,
+
+    #[arg(long, action, short = 'f')]
+    serve_files: bool,
 }
 
 #[derive(Debug)]
@@ -46,6 +51,8 @@ struct TunnelSettings {
     nonssl_addr: SocketAddr,
     redirect_ssl: bool,
     http3: bool,
+
+    serve_files: bool,
 }
 
 #[tokio::main]
@@ -124,6 +131,8 @@ async fn connector(args: &Args) -> Result<()> {
                     nonssl_addr: args.addr,
                     redirect_ssl: args.redirect_ssl,
                     http3: args.http3,
+
+                    serve_files: args.serve_files
                 };
 
                 hello_packet.tunnel_id = packet.tunnel_id;
@@ -171,6 +180,64 @@ async fn spawn_tunnel(
     let mut tunnel_stream = acceptor.accept(tunnel_stream).await?;
     tunnel_stream.write_all(&hello_packet).await?;
 
+    if settings.serve_files {
+        // for example: "GET / HTTP1.1"
+        let mut buffer = [0u8; 1];
+        let mut parts = String::new();
+        loop {
+            tunnel_stream.read(&mut buffer).await?;
+            if buffer[0] == 0x0A {
+                break;
+            }
+            parts.push(buffer[0] as char);
+        }
+
+        let parts = parts.trim().split(" ").collect::<Vec<&str>>();
+
+        let path = parts[1].trim_start_matches("/");
+        let path = if path.len() == 0 { "index.html" } else { path };
+        let local_path = std::env::current_dir()
+            .unwrap_or(PathBuf::from("/tmp"))
+            .join(path);
+
+        if local_path.exists() {
+            let file_contents = tokio::fs::read(local_path).await;
+            if let Ok(content) = file_contents {
+                let resp = construct_raw_http_resp(
+                    200,
+                    "Ok",
+                    &content,
+                    mime_guess::from_path(path)
+                        .first_raw()
+                        .unwrap_or("text/plain"),
+                );
+
+                tunnel_stream.write_all(&resp.as_bytes()).await?;
+            } else {
+                write_http_resp(
+                    &mut tunnel_stream,
+                    500,
+                    "Internal Server Error",
+                    &ERROR_HTML.replace("{MSG}", "Local file read error!"),
+                    "text/html",
+                )
+                .await?;
+            }
+        } else {
+            write_http_resp(
+                &mut tunnel_stream,
+                404,
+                "Not Found",
+                &ERROR_HTML.replace("{MSG}", "Local file not found!"),
+                "text/html",
+            )
+            .await?;
+        }
+
+        _ = tunnel_stream.shutdown().await;
+        return Ok(());
+    }
+
     let redirect_to_ssl = settings.redirect_ssl && !ssl;
     if redirect_to_ssl {
         // for example: "GET / HTTP1.1"
@@ -185,8 +252,8 @@ async fn spawn_tunnel(
         }
 
         let parts = parts.trim().split(" ").collect::<Vec<&str>>();
-        let path = parts[1].trim_end_matches('/');
-        let redirect = construct_http_redirect(&format!("https://{domain}{path}:{ssl_port}"));
+        let path = parts[1];
+        let redirect = construct_http_redirect(&format!("https://{domain}:{ssl_port}/{path}"));
         tunnel_stream.write_all(redirect.as_bytes()).await?;
     } else {
         let local_addr = match ssl {
@@ -195,12 +262,14 @@ async fn spawn_tunnel(
         };
 
         let Ok(mut local_stream) = TcpStream::connect(local_addr).await else {
-            let resp = construct_http_resp(
+            write_http_resp(
+                &mut tunnel_stream,
                 500,
                 "Internval Server Error",
                 &ERROR_HTML.replace("{MSG}", "Local server not running!"),
-            );
-            tunnel_stream.write_all(resp.as_bytes()).await?;
+                "text/html",
+            )
+            .await?;
             _ = tunnel_stream.shutdown().await;
 
             return Ok(());

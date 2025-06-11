@@ -9,9 +9,7 @@ use tokio::{
 };
 use utils::{
     certs::{cert_from_str, key_from_str},
-    http::{
-        construct_http_redirect, construct_raw_http_resp, write_http_resp,
-    },
+    http::{construct_http_redirect, construct_raw_http_resp, write_http_resp},
     parse_socketaddr, read_string_from_stream, ConnectorPacket, ConnectorPacketType, HelloPacket,
 };
 
@@ -212,7 +210,7 @@ async fn spawn_tunnel(
                         .unwrap_or("text/plain"),
                 );
 
-                tunnel_stream.write_all(&resp.as_bytes()).await?;
+                tunnel_stream.write_all(&resp).await?;
             } else {
                 write_http_resp(
                     &mut tunnel_stream,

@@ -38,17 +38,19 @@ pub fn construct_raw_http_resp(
     status_str: &str,
     content: &[u8],
     content_type: &str,
-) -> String {
-    format!(
+) -> Vec<u8> {
+    let response = format!(
         "HTTP/1.1 {status} {status_str}\r\n\
         Content-Length: {content_len}\r\n\
         Content-Type: {content_type}\r\n\
         Connection: close\r\n\
-        \r\n\
-        {content}",
+        \r\n",
         content_len = content.len(),
-        content = String::from_utf8_lossy(content)
-    )
+    );
+
+    let mut result = response.into_bytes();
+    result.extend_from_slice(content);
+    result
 }
 
 pub fn construct_http_redirect(url: &str) -> String {

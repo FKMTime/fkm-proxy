@@ -1,10 +1,10 @@
 use crate::{cert::NoCertVerification, structs::SharedProxyState};
 use anyhow::Result;
 use clap::{command, Parser};
+use fkm_proxy::utils::parse_socketaddr;
 use rcgen::CertifiedKey;
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 use tokio_rustls::{TlsAcceptor, TlsConnector};
-use utils::parse_socketaddr;
 
 mod cert;
 mod structs;
@@ -63,12 +63,12 @@ async fn main() -> Result<()> {
     let cert = if args.generate_cert {
         let CertifiedKey { cert, key_pair } =
             rcgen::generate_simple_self_signed(vec![args.domain.clone()])?;
-        let crt = utils::certs::cert_from_str(&cert.pem())?;
-        let key = utils::certs::key_from_str(&key_pair.serialize_pem())?;
+        let crt = fkm_proxy::utils::certs::cert_from_str(&cert.pem())?;
+        let key = fkm_proxy::utils::certs::key_from_str(&key_pair.serialize_pem())?;
         (crt, key)
     } else {
-        let certs = ::utils::certs::load_certs(&args.cert_path)?;
-        let privkey = ::utils::certs::load_keys(&args.privkey_path)?;
+        let certs = ::fkm_proxy::utils::certs::load_certs(&args.cert_path)?;
+        let privkey = ::fkm_proxy::utils::certs::load_keys(&args.privkey_path)?;
         (certs, privkey)
     };
 

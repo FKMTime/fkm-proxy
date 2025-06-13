@@ -1,16 +1,16 @@
 use anyhow::{anyhow, Result};
 use clap::{command, Parser};
+use fkm_proxy::utils::{
+    certs::{cert_from_str, key_from_str},
+    http::{construct_http_redirect, construct_raw_http_resp, write_http_resp},
+    parse_socketaddr, read_string_from_stream, ConnectorPacket, ConnectorPacketType, HelloPacket,
+};
 use rcgen::CertifiedKey;
 use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
     time::Instant,
-};
-use utils::{
-    certs::{cert_from_str, key_from_str},
-    http::{construct_http_redirect, construct_raw_http_resp, write_http_resp},
-    parse_socketaddr, read_string_from_stream, ConnectorPacket, ConnectorPacketType, HelloPacket,
 };
 
 const MAX_REQUEST_TIME: u128 = 1000;
@@ -86,7 +86,7 @@ async fn connector(args: &Args) -> Result<()> {
     let mut stream = acceptor.accept(stream).await?;
 
     let mut hello_packet = HelloPacket {
-        hp_type: utils::HelloPacketType::Connector,
+        hp_type: fkm_proxy::utils::HelloPacketType::Connector,
         token: args.token,
         own_ssl: args.ssl_addr.is_some(),
         tunnel_id: 0,
@@ -100,7 +100,7 @@ async fn connector(args: &Args) -> Result<()> {
         "Access through:\n - http://{domain}:{nonssl_port}\n - https://{domain}:{ssl_port}"
     );
 
-    hello_packet.hp_type = utils::HelloPacketType::Tunnel;
+    hello_packet.hp_type = fkm_proxy::utils::HelloPacketType::Tunnel;
 
     let mut last_ping = tokio::time::interval_at(
         Instant::now() + Duration::from_secs(30),

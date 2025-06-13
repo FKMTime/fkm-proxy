@@ -1,5 +1,6 @@
 use crate::structs::{SharedProxyState, TunnelError, TunnelRequest, TunnelSender};
 use anyhow::{anyhow, Result};
+use fkm_proxy::utils::{ConnectorPacket, ConnectorPacketType, HelloPacket};
 use kanal::AsyncReceiver;
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 use tokio::{
@@ -7,7 +8,6 @@ use tokio::{
     net::{TcpListener, TcpStream},
 };
 use tokio_rustls::{client::TlsStream, rustls::pki_types, TlsAcceptor, TlsConnector};
-use utils::{ConnectorPacket, ConnectorPacketType, HelloPacket};
 
 const PANEL_HTML: &str = include_str!("./resources/index.html");
 const ERROR_HTML: &str = include_str!("./resources/error.html");
@@ -71,11 +71,11 @@ async fn connector_handler(
     let mut connection_buff = [0u8; HelloPacket::buf_size()];
     stream.read_exact(&mut connection_buff).await?;
 
-    let hello_packet = ::utils::HelloPacket::from_buf(&connection_buff);
+    let hello_packet = ::fkm_proxy::utils::HelloPacket::from_buf(&connection_buff);
     let domain = state
         .get_domain_by_token(hello_packet.token)
         .await
-        .ok_or_else(|| utils::HelloPacketError::TokenMismatch)?;
+        .ok_or_else(|| fkm_proxy::utils::HelloPacketError::TokenMismatch)?;
 
     // im the connector!
     if connection_buff[0] == 0 {
@@ -83,7 +83,7 @@ async fn connector_handler(
 
         stream.write_u16(state.consts.nonssl_port).await?;
         stream.write_u16(state.consts.ssl_port).await?;
-        ::utils::send_string_to_stream(&mut stream, &domain).await?;
+        ::fkm_proxy::utils::send_string_to_stream(&mut stream, &domain).await?;
 
         let (tx, rx) = kanal::unbounded_async::<TunnelRequest>();
         state
@@ -211,7 +211,7 @@ async fn get_host(stream: &mut TcpStream, ssl: bool) -> Result<String> {
             .ok_or_else(|| anyhow!("Server name not found in TLS initial handshake"))?
             .to_string()
     } else {
-        let host = ::utils::read_http_host(&in_buffer[..n])?;
+        let host = ::fkm_proxy::utils::read_http_host(&in_buffer[..n])?;
         let host = host.split(":").next().unwrap(); // remove port from host
 
         host.to_owned()
@@ -258,7 +258,7 @@ where
         if let Err(_) = tunnel_res {
             _ = state.get_tunnel_oneshot(generated_tunnel_id).await;
 
-            _ = ::utils::http::write_http_resp(
+            _ = ::fkm_proxy::utils::http::write_http_resp(
                 &mut stream,
                 404,
                 "NOT FOUND",
@@ -290,7 +290,7 @@ where
     let tunn = match tunn_res {
         Ok(tunn) => tunn,
         Err(TunnelError::TunnelDoesNotExist) => {
-            _ = ::utils::http::write_http_resp(
+            _ = ::fkm_proxy::utils::http::write_http_resp(
                 stream,
                 404,
                 "NOT FOUND",
@@ -301,7 +301,7 @@ where
             anyhow::bail!("Tunnel does not exist!");
         }
         Err(TunnelError::NoConnectorForTunnel) => {
-            _ = ::utils::http::write_http_resp(
+            _ = ::fkm_proxy::utils::http::write_http_resp(
                 stream,
                 404,
                 "NOT FOUND",
@@ -369,9 +369,10 @@ where
 
         stream.write_all(response.as_bytes()).await?;
     } else if http_header[1] == "/" && http_header[0] == "GET" {
-        _ = ::utils::http::write_http_resp(stream, 200, "OK", PANEL_HTML, "text/html").await;
+        _ = fkm_proxy::utils::http::write_http_resp(stream, 200, "OK", PANEL_HTML, "text/html")
+            .await;
     } else {
-        _ = ::utils::http::write_http_resp(
+        _ = fkm_proxy::utils::http::write_http_resp(
             stream,
             404,
             "NOT FOUND",

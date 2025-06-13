@@ -1,5 +1,5 @@
-if [ -z "$TOKEN" ] || [ -z "$HASH" ]; then
-    echo "Token and Hash are required"
+if [ -z "$TOKEN" ]; then
+    echo "Token is required"
     exit 0
 fi
 

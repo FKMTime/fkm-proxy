@@ -134,6 +134,7 @@ async fn connector_loop(
                         _ = send_string_to_stream(stream, &reason).await;
                         _ = stream.flush().await;
 
+                        tracing::warn!("Closing tunnel with reason: {reason}");
                         return Ok(false)
                     },
                     TunnelRequest::Request { ssl, tunnel_id } => {

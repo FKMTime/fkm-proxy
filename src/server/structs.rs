@@ -1,6 +1,6 @@
 use kanal::AsyncSender;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 use thiserror::Error;
 use tokio::{
     net::TcpStream,
@@ -10,7 +10,7 @@ use tokio_rustls::{client::TlsStream, rustls::crypto::CryptoProvider, TlsAccepto
 
 /// Enum used to request tunnel from connector
 pub enum TunnelRequest {
-    Close,
+    Close(String),
     Request { ssl: bool, tunnel_id: u128 },
 }
 
@@ -113,7 +113,12 @@ impl SharedProxyState {
         let old = state.tunnels.insert(token, (own_ssl, tunnel));
 
         if let Some(old) = old {
-            _ = old.1.send(TunnelRequest::Close).await;
+            _ = old
+                .1
+                .send(TunnelRequest::Close("Other tunnel connected!".to_string()))
+                .await;
+
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
 

@@ -1,6 +1,8 @@
 use crate::structs::{SharedProxyState, TunnelError, TunnelRequest, TunnelSender};
 use anyhow::{anyhow, Result};
-use fkm_proxy::utils::{ConnectorPacket, ConnectorPacketType, HelloPacket};
+use fkm_proxy::utils::{
+    send_string_to_stream, ConnectorPacket, ConnectorPacketType, HelloPacket, HelloPacketType,
+};
 use kanal::AsyncReceiver;
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 use tokio::{
@@ -78,12 +80,12 @@ async fn connector_handler(
         .ok_or_else(|| fkm_proxy::utils::HelloPacketError::TokenMismatch)?;
 
     // im the connector!
-    if connection_buff[0] == 0 {
+    if hello_packet.hp_type == HelloPacketType::Connector {
         tracing::info!("Connector connected to url with domain: {domain}");
 
         stream.write_u16(state.consts.nonssl_port).await?;
         stream.write_u16(state.consts.ssl_port).await?;
-        ::fkm_proxy::utils::send_string_to_stream(&mut stream, &domain).await?;
+        fkm_proxy::utils::send_string_to_stream(&mut stream, &domain).await?;
 
         let (tx, rx) = kanal::unbounded_async::<TunnelRequest>();
         state
@@ -91,13 +93,15 @@ async fn connector_handler(
             .await;
 
         let res = connector_loop(&mut stream, rx).await;
-        if let Err(e) = res {
+        if let Err(ref e) = res {
             tracing::error!("Connector loop: {e:?}");
         }
 
-        state.remove_tunnel(hello_packet.token).await;
+        if matches!(res, Ok(true)) {
+            state.remove_tunnel(hello_packet.token).await;
+        }
         _ = stream.get_mut().0.shutdown().await;
-    } else if connection_buff[0] == 1 {
+    } else if hello_packet.hp_type == HelloPacketType::Tunnel {
         // im the tunnel!
         let tx = state
             .get_tunnel_oneshot(hello_packet.tunnel_id)
@@ -113,14 +117,25 @@ async fn connector_handler(
 async fn connector_loop(
     stream: &mut TlsStream<TcpStream>,
     rx: AsyncReceiver<TunnelRequest>,
-) -> Result<()> {
+) -> Result<bool> {
     let mut pinger = tokio::time::interval(Duration::from_secs(15));
     loop {
         tokio::select! {
             res = rx.recv() => {
                 let res = res?;
                 match res {
-                    TunnelRequest::Close => return Ok(()),
+                    TunnelRequest::Close(reason) => {
+                        _ = stream.write_all(&ConnectorPacket {
+                            packet_type: ConnectorPacketType::Close,
+                            tunnel_id: 0,
+                            ssl: false,
+                            http3: false
+                        }.to_buf()).await;
+                        _ = send_string_to_stream(stream, &reason).await;
+                        _ = stream.flush().await;
+
+                        return Ok(false)
+                    },
                     TunnelRequest::Request { ssl, tunnel_id } => {
                         stream.write_all(&ConnectorPacket {
                             packet_type: ConnectorPacketType::TunnelRequest,
@@ -133,7 +148,7 @@ async fn connector_loop(
             }
             res = stream.read_u8() => {
                 if res.is_err() {
-                    return Ok(());
+                    return Ok(true);
                 }
             }
             _ = pinger.tick() => {
@@ -148,7 +163,7 @@ async fn connector_loop(
                 if read != 0x69 {
                     tracing::error!("Wrong pong response: {:x}", read);
                     _ = stream.shutdown().await;
-                    return Ok(());
+                    return Ok(true);
                 }
             }
         }

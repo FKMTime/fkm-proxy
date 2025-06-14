@@ -76,6 +76,7 @@ impl HelloPacket {
 pub enum ConnectorPacketType {
     Ping = 0,
     TunnelRequest = 1,
+    Close = 2,
 
     Invalid,
 }
@@ -85,6 +86,7 @@ impl ConnectorPacketType {
         match self {
             ConnectorPacketType::Ping => 0,
             ConnectorPacketType::TunnelRequest => 1,
+            ConnectorPacketType::Close => 2,
             ConnectorPacketType::Invalid => u8::MAX,
         }
     }
@@ -93,6 +95,7 @@ impl ConnectorPacketType {
         match val {
             0 => ConnectorPacketType::Ping,
             1 => ConnectorPacketType::TunnelRequest,
+            2 => ConnectorPacketType::Close,
             _ => ConnectorPacketType::Invalid,
         }
     }

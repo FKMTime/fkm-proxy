@@ -118,6 +118,10 @@ async fn connector(args: &Args) -> Result<()> {
                     last_ping.reset();
 
                     continue; // ping/pong
+                } else if packet.packet_type == ConnectorPacketType::Close {
+                    let reason = read_string_from_stream(&mut stream).await?;
+                    tracing::error!("Closing connector! Close reason: {reason}");
+                    return Ok(());
                 }
 
                 let domain = domain.to_string();

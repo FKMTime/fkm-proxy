@@ -19,7 +19,7 @@ const ERROR_HTML: &str = include_str!("./resources/error.html");
 #[derive(Parser, Debug, Clone)]
 #[command(version, about, long_about = None)]
 struct Args {
-    #[arg(short, long, value_parser = parse_socketaddr, default_value = "v1.filipton.space:6969", env = "PROXY")]
+    #[arg(short, long, value_parser = parse_socketaddr, default_value = "vps.filipton.space:6969", env = "PROXY")]
     proxy_addr: SocketAddr,
 
     #[arg(short, long, value_parser = parse_socketaddr, default_value = "127.0.0.1:80", env = "ADDR")]
@@ -110,9 +110,13 @@ async fn connector(args: &Args) -> Result<()> {
     let mut buf = [0; ConnectorPacket::buf_size()];
     loop {
         tokio::select! {
-            _ = stream.read_exact(&mut buf) => {
-                let packet = ConnectorPacket::from_buf(&buf);
+            res = stream.read_exact(&mut buf) => {
+                if res.is_err() {
+                    tracing::error!("Connector read error: {res:?}. Closing connection.");
+                    return Ok(());
+                }
 
+                let packet = ConnectorPacket::from_buf(&buf);
                 if packet.packet_type == ConnectorPacketType::Ping {
                     stream.write_u8(0x69).await?;
                     last_ping.reset();

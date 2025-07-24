@@ -1,7 +1,7 @@
 [package]
 name = "fkm-proxy"
-version = "0.1.1"
-edition = "2021"
+version = "0.1.2"
+edition = "2024"
 license = "MIT"
 description = "Fkm proxy client & server"
 repository = "https://github.com/FKMTime/fkm-proxy"
@@ -31,6 +31,7 @@ mime_guess = "2.0.5"
 rustls-pemfile = "2.2.0"
 rustls = { version = "0.23.29", default-features = false, features = ["std"] }
 qls-proto-utils = "0.2.0"
+http = "1.3.1"
 
 [profile.release]
 opt-level = "z"     # Optimize for size.

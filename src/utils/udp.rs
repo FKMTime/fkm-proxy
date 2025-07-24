@@ -64,10 +64,7 @@ impl UdpClient {
 
     async fn recv(&mut self) -> Option<Vec<u8>> {
         let timeout = tokio::time::timeout(Duration::from_secs(45), self.rx.recv()).await;
-        match timeout {
-            Ok(recv) => recv,
-            Err(_) => None,
-        }
+        timeout.unwrap_or_default()
     }
 
     pub async fn copy_bidirectional_udp(

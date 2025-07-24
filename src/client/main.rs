@@ -34,9 +34,6 @@ struct Args {
     #[arg(short, long, action, env = "REDIRECT_SSL")]
     redirect_ssl: bool,
 
-    #[arg(long, action, env = "HTTP3")]
-    http3: bool,
-
     #[arg(long, action, short = 'f')]
     serve_files: bool,
 }
@@ -48,7 +45,6 @@ struct TunnelSettings {
     ssl_addr: SocketAddr,
     nonssl_addr: SocketAddr,
     redirect_ssl: bool,
-    http3: bool,
 
     serve_files: bool,
 }
@@ -71,10 +67,10 @@ async fn main() -> Result<()> {
 }
 
 async fn connector(args: &Args) -> Result<()> {
-    let CertifiedKey { cert, key_pair } =
+    let CertifiedKey { cert, signing_key } =
         rcgen::generate_simple_self_signed(vec!["proxy.lan".to_string()])?;
     let crt = cert_from_str(&cert.pem())?;
-    let key = key_from_str(&key_pair.serialize_pem())?;
+    let key = key_from_str(&signing_key.serialize_pem())?;
 
     let config = tokio_rustls::rustls::ServerConfig::builder()
         .with_no_client_auth()
@@ -136,8 +132,6 @@ async fn connector(args: &Args) -> Result<()> {
                     ssl_addr: args.ssl_addr.unwrap_or(args.addr),
                     nonssl_addr: args.addr,
                     redirect_ssl: args.redirect_ssl,
-                    http3: args.http3,
-
                     serve_files: args.serve_files
                 };
 
@@ -191,7 +185,7 @@ async fn spawn_tunnel(
         let mut buffer = [0u8; 1];
         let mut parts = String::new();
         loop {
-            tunnel_stream.read(&mut buffer).await?;
+            tunnel_stream.read_exact(&mut buffer).await?;
             if buffer[0] == 0x0A {
                 break;
             }
@@ -201,7 +195,7 @@ async fn spawn_tunnel(
         let parts = parts.trim().split(" ").collect::<Vec<&str>>();
 
         let path = parts[1].trim_start_matches("/");
-        let path = if path.len() == 0 { "index.html" } else { path };
+        let path = if path.is_empty() { "index.html" } else { path };
         let local_path = std::env::current_dir()
             .unwrap_or(PathBuf::from("/tmp"))
             .join(path);
@@ -250,7 +244,7 @@ async fn spawn_tunnel(
         let mut buffer = [0u8; 1];
         let mut parts = String::new();
         loop {
-            tunnel_stream.read(&mut buffer).await?;
+            tunnel_stream.read_exact(&mut buffer).await?;
             if buffer[0] == 0x0A {
                 break;
             }

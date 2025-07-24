@@ -129,7 +129,6 @@ async fn connector_loop(
                             packet_type: ConnectorPacketType::Close,
                             tunnel_id: 0,
                             ssl: false,
-                            http3: false
                         }.to_buf()).await;
                         _ = send_string_to_stream(stream, &reason).await;
                         _ = stream.flush().await;
@@ -143,7 +142,6 @@ async fn connector_loop(
                             packet_type: ConnectorPacketType::TunnelRequest,
                             tunnel_id,
                             ssl,
-                            http3: false
                         }.to_buf()).await?;
                     }
                 }
@@ -158,7 +156,6 @@ async fn connector_loop(
                     packet_type: ConnectorPacketType::Ping,
                     tunnel_id: 0,
                     ssl: false,
-                    http3: false
                 }.to_buf()).await?;
 
                 let read = stream.read_u8().await?;
@@ -247,7 +244,7 @@ async fn handle_client_inner<T>(
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
-    if state.is_host_panel(&host) {
+    if state.is_host_panel(host) {
         let mut in_buffer = [0; 8192];
         let n = stream.read(&mut in_buffer).await?;
         serve_panel(&mut stream, &in_buffer[..n], &state).await?;
@@ -272,7 +269,7 @@ where
         let tunnel_res =
             tokio::time::timeout(Duration::from_millis(state.get_tunnel_timeout().await), rx).await;
 
-        if let Err(_) = tunnel_res {
+        if tunnel_res.is_err() {
             _ = state.get_tunnel_oneshot(generated_tunnel_id).await;
 
             _ = ::fkm_proxy::utils::http::write_http_resp(
@@ -339,7 +336,7 @@ where
 pub type TunnelGetResult = Result<(bool, TunnelSender), TunnelError>;
 async fn get_host_tunnel(state: &SharedProxyState, host: &str) -> TunnelGetResult {
     let token = state
-        .get_client_token(&host)
+        .get_client_token(host)
         .await
         .ok_or_else(|| TunnelError::TunnelDoesNotExist)?;
 
@@ -375,13 +372,12 @@ where
             .collect();
 
         let url = search.get("url").ok_or_else(|| anyhow!("No url!"))?;
-        let token = state.generate_new_client(*url).await?;
+        let token = state.generate_new_client(url).await?;
 
-        let body = format!("{{\"url\":\"{}\",\"token\":\"{}\"}}", url, token);
+        let body = format!("{{\"url\":\"{url}\",\"token\":\"{token}\"}}");
         let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
             body.len(),
-            body
         );
 
         stream.write_all(response.as_bytes()).await?;

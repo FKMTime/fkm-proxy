@@ -44,6 +44,7 @@ pub struct SharedProxyState {
 
 #[allow(dead_code)]
 impl SharedProxyState {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         tls_acceptor: TlsAcceptor,
         tls_connector: TlsConnector,

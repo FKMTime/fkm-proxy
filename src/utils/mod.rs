@@ -106,7 +106,6 @@ pub struct ConnectorPacket {
     pub packet_type: ConnectorPacketType,
     pub tunnel_id: u128,
     pub ssl: bool,
-    pub http3: bool,
 }
 
 impl ConnectorPacket {
@@ -119,7 +118,6 @@ impl ConnectorPacket {
         tmp[0] = self.packet_type.to_u8();
         tmp[1..17].copy_from_slice(&self.tunnel_id.to_be_bytes());
         tmp[17] = self.ssl as u8;
-        tmp[18] = self.http3 as u8;
 
         tmp
     }
@@ -129,7 +127,6 @@ impl ConnectorPacket {
             packet_type: ConnectorPacketType::from_u8(buf[0]),
             tunnel_id: u128::from_be_bytes(buf[1..17].try_into().unwrap()),
             ssl: buf[17] != 0,
-            http3: buf[18] != 0,
         }
     }
 }

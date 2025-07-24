@@ -54,8 +54,5 @@ pub fn construct_raw_http_resp(
 }
 
 pub fn construct_http_redirect(url: &str) -> String {
-    format!(
-        "HTTP/1.1 301 Moved Permanently\r\nLocation: {}\r\nContent-Length: 0\r\n\r\n",
-        url
-    )
+    format!("HTTP/1.1 301 Moved Permanently\r\nLocation: {url}\r\nContent-Length: 0\r\n\r\n",)
 }

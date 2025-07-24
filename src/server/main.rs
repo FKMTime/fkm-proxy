@@ -48,9 +48,6 @@ struct Args {
 
     #[arg(long)]
     generate_cert: bool,
-
-    #[arg(long, action, env = "HTTP3")]
-    http3: bool,
 }
 
 #[tokio::main]
@@ -61,10 +58,10 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     let cert = if args.generate_cert {
-        let CertifiedKey { cert, key_pair } =
+        let CertifiedKey { cert, signing_key } =
             rcgen::generate_simple_self_signed(vec![args.domain.clone()])?;
         let crt = fkm_proxy::utils::certs::cert_from_str(&cert.pem())?;
-        let key = fkm_proxy::utils::certs::key_from_str(&key_pair.serialize_pem())?;
+        let key = fkm_proxy::utils::certs::key_from_str(&signing_key.serialize_pem())?;
         (crt, key)
     } else {
         let certs = ::fkm_proxy::utils::certs::load_certs(&args.cert_path)?;

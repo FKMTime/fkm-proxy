@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Directory Listing {DIR_PATH}</title>
+    <style>
+        body {
+            font-family: monospace;
+            margin: 20px 20px 60px 20px;
+            /* Add bottom margin for footer space */
+            min-height: calc(100vh - 80px);
+            /* Ensure body takes at least viewport height minus margins */
+            display: flex;
+            flex-direction: column;
+        }
+
+        table {
+            border-collapse: collapse;
+            width: 100%;
+        }
+
+        th,
+        td {
+            padding: 8px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+
+        th {
+            background-color: #f2f2f2;
+        }
+
+        a {
+            text-decoration: none;
+            color: #0000EE;
+        }
+
+        a:hover {
+            text-decoration: underline;
+        }
+
+        footer {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            text-align: center;
+            font-size: 14px;
+            padding: 10px 0;
+            background-color: #fff;
+            /* Ensure footer is readable */
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Index of {DIR_PATH}</h1>
+    <table>
+        <tr>
+            <th>Name</th>
+            <th>Last Modified</th>
+            <th>Size</th>
+        </tr>
+        {CONTENT}
+    </table>
+    <footer>
+        <p>Powered by <a href="https://github.com/FKMTime/fkm-proxy">fkm-proxy-client</a></p>
+    </footer>
+</body>
+
+</html>

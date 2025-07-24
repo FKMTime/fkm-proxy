@@ -1,7 +1,7 @@
 use crate::structs::{SharedProxyState, TunnelError, TunnelRequest, TunnelSender};
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use fkm_proxy::utils::{
-    send_string_to_stream, ConnectorPacket, ConnectorPacketType, HelloPacket, HelloPacketType,
+    ConnectorPacket, ConnectorPacketType, HelloPacket, HelloPacketType, send_string_to_stream,
 };
 use kanal::AsyncReceiver;
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
@@ -9,7 +9,7 @@ use tokio::{
     io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
-use tokio_rustls::{client::TlsStream, rustls::pki_types, TlsAcceptor, TlsConnector};
+use tokio_rustls::{TlsAcceptor, TlsConnector, client::TlsStream, rustls::pki_types};
 
 const PANEL_HTML: &str = include_str!("./resources/index.html");
 const ERROR_HTML: &str = include_str!("./resources/error.html");
@@ -275,7 +275,6 @@ where
             _ = ::fkm_proxy::utils::http::write_http_resp(
                 &mut stream,
                 404,
-                "NOT FOUND",
                 &ERROR_HTML.replace(
                     "{MSG}",
                     &format!("Tunnel timeout! REF ID: {generated_tunnel_id}"),
@@ -307,7 +306,6 @@ where
             _ = ::fkm_proxy::utils::http::write_http_resp(
                 stream,
                 404,
-                "NOT FOUND",
                 &ERROR_HTML.replace("{MSG}", "This tunnel does not exists!"),
                 "text/html",
             )
@@ -318,7 +316,6 @@ where
             _ = ::fkm_proxy::utils::http::write_http_resp(
                 stream,
                 404,
-                "NOT FOUND",
                 &ERROR_HTML.replace("{MSG}", "Connector for this tunnel isn't connected!"),
                 "text/html",
             )
@@ -382,13 +379,11 @@ where
 
         stream.write_all(response.as_bytes()).await?;
     } else if http_header[1] == "/" && http_header[0] == "GET" {
-        _ = fkm_proxy::utils::http::write_http_resp(stream, 200, "OK", PANEL_HTML, "text/html")
-            .await;
+        _ = fkm_proxy::utils::http::write_http_resp(stream, 200, PANEL_HTML, "text/html").await;
     } else {
         _ = fkm_proxy::utils::http::write_http_resp(
             stream,
             404,
-            "NOT FOUND",
             "That page does not exists!",
             "text/html",
         )

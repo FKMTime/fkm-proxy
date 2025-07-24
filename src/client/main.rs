@@ -3,19 +3,22 @@ use clap::{Parser, command};
 use fkm_proxy::utils::{
     ConnectorPacket, ConnectorPacketType, HelloPacket,
     certs::{cert_from_str, key_from_str},
-    http::{construct_http_redirect, construct_raw_http_resp, write_http_resp},
+    http::{construct_http_redirect, write_http_resp},
     parse_socketaddr, read_string_from_stream,
 };
 use rcgen::CertifiedKey;
-use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
     time::Instant,
 };
 
+mod serve;
+
 const MAX_REQUEST_TIME: u128 = 1000;
 const ERROR_HTML: &str = include_str!("./resources/error.html");
+const LIST_HTML: &str = include_str!("./resources/list.html");
 
 #[derive(Parser, Debug, Clone)]
 #[command(version, about, long_about = None)]
@@ -194,91 +197,7 @@ async fn spawn_tunnel(
     tunnel_stream.write_all(&hello_packet).await?;
 
     if settings.serve_files {
-        // for example: "GET / HTTP1.1"
-        let mut buffer = [0u8; 1];
-        let mut parts = String::new();
-        loop {
-            tunnel_stream.read_exact(&mut buffer).await?;
-            if buffer[0] == 0x0A {
-                break;
-            }
-            parts.push(buffer[0] as char);
-        }
-
-        let parts = parts.trim().split(" ").collect::<Vec<&str>>();
-
-        let path = parts[1].trim_start_matches("/");
-        let local_path = std::env::current_dir()
-            .unwrap_or(PathBuf::from("/tmp"))
-            .join(path);
-
-        tracing::warn!("{local_path:?}");
-
-        if local_path.exists() {
-            if let Ok(metadata) = local_path.metadata() {
-                if metadata.is_dir() {
-                    let index_file = local_path.join("index.html");
-                    if index_file.exists() {
-                        serve_file(&mut tunnel_stream, &index_file).await?;
-                    } else if settings.files_index {
-                        let mut generated = "<pre>LIST:\n".to_string();
-                        if let Ok(dir) = local_path.read_dir() {
-                            for e in dir {
-                                if let Ok(entry) = e
-                                    && let Ok(metadata) = entry.metadata()
-                                {
-                                    let filename = entry.file_name();
-                                    let filename = filename.to_str().unwrap_or("---");
-
-                                    if metadata.is_file() {
-                                        generated += &format!("\t -F {filename}\n");
-                                    } else if metadata.is_dir() {
-                                        generated += &format!("\t -D {filename}\n");
-                                    } else {
-                                        generated += &format!("\t -* {filename}\n");
-                                    }
-                                }
-                            }
-                        }
-
-                        write_http_resp(
-                            &mut tunnel_stream,
-                            200,
-                            &(generated + "</pre>"),
-                            "text/html",
-                        )
-                        .await?;
-                    } else {
-                        write_http_resp(
-                            &mut tunnel_stream,
-                            404,
-                            &ERROR_HTML.replace("{MSG}", "Local file not found!"),
-                            "text/html",
-                        )
-                        .await?;
-                    }
-                } else if metadata.is_file() {
-                    serve_file(&mut tunnel_stream, &local_path).await?;
-                }
-            } else {
-                write_http_resp(
-                    &mut tunnel_stream,
-                    500,
-                    &ERROR_HTML.replace("{MSG}", "File metadata not found!"),
-                    "text/html",
-                )
-                .await?;
-            }
-        } else {
-            write_http_resp(
-                &mut tunnel_stream,
-                404,
-                &ERROR_HTML.replace("{MSG}", "Local file not found!"),
-                "text/html",
-            )
-            .await?;
-        }
-
+        _ = serve::serve_files(&mut tunnel_stream, settings.files_index).await;
         _ = tunnel_stream.shutdown().await;
         return Ok(());
     }
@@ -325,33 +244,5 @@ async fn spawn_tunnel(
     }
 
     _ = tunnel_stream.shutdown().await;
-    Ok(())
-}
-
-async fn serve_file<S>(stream: &mut S, path: &PathBuf) -> Result<()>
-where
-    S: AsyncReadExt + AsyncWriteExt + Unpin,
-{
-    let file_contents = tokio::fs::read(path).await;
-    if let Ok(content) = file_contents {
-        let resp = construct_raw_http_resp(
-            200,
-            &content,
-            mime_guess::from_path(path)
-                .first_raw()
-                .unwrap_or("text/plain"),
-        );
-
-        stream.write_all(&resp).await?;
-    } else {
-        write_http_resp(
-            stream,
-            500,
-            &ERROR_HTML.replace("{MSG}", "Local file read error!"),
-            "text/html",
-        )
-        .await?;
-    }
-
     Ok(())
 }

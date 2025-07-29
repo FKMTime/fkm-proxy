@@ -1,6 +1,6 @@
 use crate::{cert::NoCertVerification, structs::SharedProxyState};
 use anyhow::Result;
-use clap::{command, Parser};
+use clap::{Parser, command};
 use fkm_proxy::utils::parse_socketaddr;
 use rcgen::CertifiedKey;
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};

@@ -94,6 +94,7 @@ async fn connector(args: &Args) -> Result<()> {
 
     let stream = TcpStream::connect(&args.proxy_addr).await?;
     let mut stream = acceptor.accept(stream).await?;
+    let mut buf = [0; ConnectorPacket::buf_size()];
 
     let mut hello_packet = HelloPacket {
         hp_type: fkm_proxy::utils::HelloPacketType::Connector,
@@ -103,6 +104,25 @@ async fn connector(args: &Args) -> Result<()> {
     };
 
     stream.write_all(&hello_packet.to_buf()).await?;
+    let res = stream.read_exact(&mut buf).await;
+    if res.is_err() {
+        tracing::error!("Connector read error: {res:?}. Closing connection.");
+        return Ok(());
+    }
+    let packet = ConnectorPacket::from_buf(&buf);
+    match packet.packet_type {
+        ConnectorPacketType::ConnectorConnected => {}
+        ConnectorPacketType::Close => {
+            let reason = read_string_from_stream(&mut stream).await?;
+            tracing::error!("Closing connector! Close reason: {reason}");
+            return Ok(());
+        }
+        _ => {
+            tracing::error!("Closing connector! Wrong packet response!");
+            return Ok(());
+        }
+    }
+
     let nonssl_port = stream.read_u16().await?;
     let ssl_port = stream.read_u16().await?;
     let domain = read_string_from_stream(&mut stream).await?;
@@ -117,7 +137,6 @@ async fn connector(args: &Args) -> Result<()> {
         Duration::from_secs(30),
     );
 
-    let mut buf = [0; ConnectorPacket::buf_size()];
     loop {
         tokio::select! {
             res = stream.read_exact(&mut buf) => {

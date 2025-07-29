@@ -74,15 +74,44 @@ async fn connector_handler(
     stream.read_exact(&mut connection_buff).await?;
 
     let hello_packet = ::fkm_proxy::utils::HelloPacket::from_buf(&connection_buff);
-    let domain = state
+    let Ok(domain) = state
         .get_domain_by_token(hello_packet.token)
         .await
-        .ok_or_else(|| fkm_proxy::utils::HelloPacketError::TokenMismatch)?;
+        .ok_or_else(|| fkm_proxy::utils::HelloPacketError::TokenMismatch)
+    else {
+        _ = stream
+            .write_all(
+                &ConnectorPacket {
+                    packet_type: ConnectorPacketType::Close,
+                    tunnel_id: 0,
+                    ssl: false,
+                }
+                .to_buf(),
+            )
+            .await;
+        _ = send_string_to_stream(&mut stream, "Wrong token").await;
+        _ = stream.flush().await;
+
+        tracing::warn!("Closing tunnel with reason: Wrong token");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        _ = stream.get_mut().0.shutdown().await;
+        return Ok(());
+    };
 
     // im the connector!
     if hello_packet.hp_type == HelloPacketType::Connector {
         tracing::info!("Connector connected to url with domain: {domain}");
 
+        _ = stream
+            .write_all(
+                &ConnectorPacket {
+                    packet_type: ConnectorPacketType::ConnectorConnected,
+                    tunnel_id: 0,
+                    ssl: false,
+                }
+                .to_buf(),
+            )
+            .await;
         stream.write_u16(state.consts.nonssl_port).await?;
         stream.write_u16(state.consts.ssl_port).await?;
         fkm_proxy::utils::send_string_to_stream(&mut stream, &domain).await?;

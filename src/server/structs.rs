@@ -4,9 +4,9 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use thiserror::Error;
 use tokio::{
     net::TcpStream,
-    sync::{oneshot::Sender, RwLock},
+    sync::{RwLock, oneshot::Sender},
 };
-use tokio_rustls::{client::TlsStream, rustls::crypto::CryptoProvider, TlsAcceptor, TlsConnector};
+use tokio_rustls::{TlsAcceptor, TlsConnector, client::TlsStream, rustls::crypto::CryptoProvider};
 
 /// Enum used to request tunnel from connector
 pub enum TunnelRequest {

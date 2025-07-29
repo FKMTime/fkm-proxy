@@ -77,6 +77,7 @@ pub enum ConnectorPacketType {
     Ping = 0,
     TunnelRequest = 1,
     Close = 2,
+    ConnectorConnected = 3,
 
     Invalid,
 }
@@ -87,6 +88,7 @@ impl ConnectorPacketType {
             ConnectorPacketType::Ping => 0,
             ConnectorPacketType::TunnelRequest => 1,
             ConnectorPacketType::Close => 2,
+            ConnectorPacketType::ConnectorConnected => 3,
             ConnectorPacketType::Invalid => u8::MAX,
         }
     }
@@ -96,6 +98,7 @@ impl ConnectorPacketType {
             0 => ConnectorPacketType::Ping,
             1 => ConnectorPacketType::TunnelRequest,
             2 => ConnectorPacketType::Close,
+            3 => ConnectorPacketType::ConnectorConnected,
             _ => ConnectorPacketType::Invalid,
         }
     }

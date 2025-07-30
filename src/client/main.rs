@@ -1,13 +1,19 @@
 use anyhow::{Result, anyhow};
 use clap::{Parser, command};
 use fkm_proxy::utils::{
-    ConnectorPacket, ConnectorPacketType, HelloPacket,
+    ConnectorPacket, ConnectorPacketType, ConnectorStream, HelloPacket,
     certs::{cert_from_str, key_from_str},
     http::{construct_http_redirect, write_http_resp},
     parse_socketaddr, read_string_from_stream,
 };
+use quinn::{ClientConfig, Endpoint, crypto::rustls::QuicClientConfig};
 use rcgen::CertifiedKey;
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+use std::{
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    sync::Arc,
+    time::Duration,
+};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -81,19 +87,41 @@ async fn main() -> Result<()> {
 }
 
 async fn connector(args: &Args) -> Result<()> {
-    let CertifiedKey { cert, signing_key } =
-        rcgen::generate_simple_self_signed(vec!["proxy.lan".to_string()])?;
-    let crt = cert_from_str(&cert.pem())?;
-    let key = key_from_str(&signing_key.serialize_pem())?;
+    let mut endpoint = Endpoint::client(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))?;
+    endpoint.set_default_client_config(ClientConfig::new(Arc::new(QuicClientConfig::try_from(
+        rustls::ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(SkipServerVerification::new())
+            .with_no_client_auth(),
+    )?)));
 
-    let config = tokio_rustls::rustls::ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(crt, key)?;
+    let connection = endpoint
+        .connect(args.proxy_addr, "proxy.lan")
+        .unwrap()
+        .await
+        .unwrap();
+
+    let quic_bi = connection
+        .open_bi()
+        .await
+        .map_err(|e| anyhow!("failed to open stream: {}", e))?;
+    let mut stream = ConnectorStream::Quic(quic_bi);
+
+    /*
+       let CertifiedKey { cert, signing_key } =
+       rcgen::generate_simple_self_signed(vec!["proxy.lan".to_string()])?;
+       let crt = cert_from_str(&cert.pem())?;
+       let key = key_from_str(&signing_key.serialize_pem())?;
+
+       let config = tokio_rustls::rustls::ServerConfig::builder()
+       .with_no_client_auth()
+       .with_single_cert(crt, key)?;
 
     let acceptor = Arc::new(tokio_rustls::TlsAcceptor::from(Arc::new(config)));
 
     let stream = TcpStream::connect(&args.proxy_addr).await?;
     let mut stream = acceptor.accept(stream).await?;
+    */
     let mut buf = [0; ConnectorPacket::buf_size()];
 
     let mut hello_packet = HelloPacket {
@@ -158,7 +186,7 @@ async fn connector(args: &Args) -> Result<()> {
                 }
 
                 let domain = domain.to_string();
-                let acceptor = acceptor.clone();
+                //let acceptor = acceptor.clone();
                 let requested_time = Instant::now();
                 let settings = TunnelSettings {
                     proxy_addr: args.proxy_addr,
@@ -179,7 +207,7 @@ async fn connector(args: &Args) -> Result<()> {
                         packet.ssl,
                         ssl_port,
                         domain,
-                        acceptor,
+                        //acceptor,
                         requested_time,
                     )
                         .await;
@@ -203,20 +231,44 @@ async fn spawn_tunnel(
     ssl: bool,
     ssl_port: u16,
     domain: String,
-    acceptor: Arc<tokio_rustls::TlsAcceptor>,
+    //acceptor: Arc<tokio_rustls::TlsAcceptor>,
     request_time: Instant,
 ) -> Result<()> {
     if request_time.elapsed().as_millis() > MAX_REQUEST_TIME {
         return Err(anyhow!("Requested time exceeded max request time."));
     }
 
+    let mut endpoint = Endpoint::client(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))?;
+    endpoint.set_default_client_config(ClientConfig::new(Arc::new(QuicClientConfig::try_from(
+        rustls::ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(SkipServerVerification::new())
+            .with_no_client_auth(),
+    )?)));
+
+    let connection = endpoint
+        .connect(settings.proxy_addr, "proxy.lan")
+        .unwrap()
+        .await
+        .unwrap();
+
+    let quic_bi = connection
+        .open_bi()
+        .await
+        .map_err(|e| anyhow!("failed to open stream: {}", e))?;
+    let mut tunnel_stream = ConnectorStream::Quic(quic_bi);
+
+    /*
     let tunnel_stream = TcpStream::connect(settings.proxy_addr).await?;
     tunnel_stream.set_nodelay(true)?;
     let mut tunnel_stream = acceptor.accept(tunnel_stream).await?;
+    */
     tunnel_stream.write_all(&hello_packet).await?;
 
     if settings.serve_files {
         _ = serve::serve_files(&mut tunnel_stream, settings.files_index).await;
+        tunnel_stream.flush().await?;
+        tokio::time::sleep(Duration::from_millis(100)).await;
         _ = tunnel_stream.shutdown().await;
         return Ok(());
     }
@@ -264,4 +316,58 @@ async fn spawn_tunnel(
 
     _ = tunnel_stream.shutdown().await;
     Ok(())
+}
+
+#[derive(Debug)]
+struct SkipServerVerification(Arc<rustls::crypto::CryptoProvider>);
+
+impl SkipServerVerification {
+    fn new() -> Arc<Self> {
+        Arc::new(Self(Arc::new(rustls::crypto::ring::default_provider())))
+    }
+}
+
+impl rustls::client::danger::ServerCertVerifier for SkipServerVerification {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp: &[u8],
+        _now: UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.0.signature_verification_algorithms.supported_schemes()
+    }
 }

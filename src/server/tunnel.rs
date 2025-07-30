@@ -31,19 +31,26 @@ pub async fn spawn_tunnel_connector(
         });
     }
 
-    let shared_proxy_state = shared_proxy_state.clone();
+    let shared_proxy_state_c = shared_proxy_state.clone();
     tokio::task::spawn(async move {
-        let res = connector_listener(connector_addr, shared_proxy_state).await;
+        let res = connector_listener_tcp(connector_addr, shared_proxy_state_c).await;
         if let Err(e) = res {
-            tracing::error!("Connector listener error: {e}");
+            tracing::error!("Tcp connector listener error: {e}");
+        }
+    });
+
+    tokio::task::spawn(async move {
+        let res = connector_listener_udp(connector_addr, shared_proxy_state).await;
+        if let Err(e) = res {
+            tracing::error!("Udp connector listener error: {e}");
         }
     });
 
     Ok(())
 }
 
-async fn connector_listener(addr: SocketAddr, state: SharedProxyState) -> Result<()> {
-    tracing::info!("Connector listening on: {addr}");
+async fn connector_listener_tcp(addr: SocketAddr, state: SharedProxyState) -> Result<()> {
+    tracing::info!("Tcp connector listening on: {addr}");
     let listener = TcpListener::bind(addr).await?;
     let connector = state.get_tls_connector().await;
 
@@ -54,15 +61,73 @@ async fn connector_listener(addr: SocketAddr, state: SharedProxyState) -> Result
         let state = state.clone();
         let connector = connector.clone();
         tokio::task::spawn(async move {
-            let res = connector_handler(stream, state, connector).await;
+            let res = connector_handler_tcp(stream, state, connector).await;
             if let Err(e) = res {
-                tracing::error!("Connector error: {e}");
+                tracing::error!("Tcp connector handler error: {e}");
             }
         });
     }
 }
 
-async fn connector_handler(
+async fn connector_listener_udp(addr: SocketAddr, state: SharedProxyState) -> Result<()> {
+    tracing::info!("Udp connector listening on: {addr}");
+
+    let (certs, key) = {
+        let cert = rcgen::generate_simple_self_signed(vec!["proxy.local".into()]).unwrap();
+        let key = pki_types::PrivatePkcs8KeyDer::from(cert.signing_key.serialize_der());
+        let key: pki_types::PrivateKeyDer = key.into();
+        let cert: pki_types::CertificateDer = cert.cert.into();
+        (vec![cert], key)
+    };
+
+    let server_crypto = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, key)?;
+    let mut server_config = quinn::ServerConfig::with_crypto(Arc::new(
+        quinn::crypto::rustls::QuicServerConfig::try_from(server_crypto)?,
+    ));
+    let transport_config = Arc::get_mut(&mut server_config.transport).unwrap();
+    transport_config.max_concurrent_uni_streams(0_u8.into());
+
+    let endpoint = quinn::Endpoint::server(server_config, addr)?;
+
+    while let Some(conn) = endpoint.accept().await {
+        let fut = handle_quic_connection(conn, state.clone());
+        tokio::spawn(async move {
+            if let Err(e) = fut.await {
+                eprintln!("connection failed: {reason}", reason = e.to_string())
+            }
+        });
+    }
+
+    Ok(())
+}
+
+async fn handle_quic_connection(conn: quinn::Incoming, state: SharedProxyState) -> Result<()> {
+    let connection = conn.await?;
+    loop {
+        let stream = connection.accept_bi().await;
+        let stream = match stream {
+            Err(quinn::ConnectionError::ApplicationClosed { .. }) => {
+                eprintln!("connection closed");
+                return Ok(());
+            }
+            Err(e) => {
+                return Err(e.into());
+            }
+            Ok(s) => s,
+        };
+
+        let fut = connector_handler(ConnectorStream::Quic(stream), state.clone());
+        tokio::spawn(async move {
+            if let Err(e) = fut.await {
+                eprintln!("failed: {reason}", reason = e.to_string());
+            }
+        });
+    }
+}
+
+async fn connector_handler_tcp(
     stream: TcpStream,
     state: SharedProxyState,
     connector: Arc<TlsConnector>,
@@ -71,8 +136,12 @@ async fn connector_handler(
         .connect(pki_types::ServerName::try_from("proxy.lan")?, stream)
         .await?;
 
-    let mut stream = ConnectorStream::TcpTls(Box::new(stream));
+    let stream = ConnectorStream::TcpTls(Box::new(stream));
+    connector_handler(stream, state).await
+}
 
+#[inline(always)]
+async fn connector_handler(mut stream: ConnectorStream, state: SharedProxyState) -> Result<()> {
     let mut connection_buff = [0u8; HelloPacket::buf_size()];
     stream.read_exact(&mut connection_buff).await?;
 

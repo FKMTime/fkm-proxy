@@ -226,11 +226,14 @@ pub enum ConnectorStream {
 
 impl ConnectorStream {
     pub async fn shutdown(&mut self) {
+        tokio::time::sleep(Duration::from_millis(100)).await;
         match self {
             ConnectorStream::TcpTls(stream) => {
-                _ = stream.get_mut().0.shutdown().await;
+                _ = stream.flush().await;
+                _ = stream.shutdown().await;
             }
             ConnectorStream::Quic((send, recv)) => {
+                _ = send.flush().await;
                 _ = send.shutdown().await;
                 _ = recv.stop(VarInt::from_u32(0));
             }

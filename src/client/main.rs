@@ -200,8 +200,15 @@ async fn connector(args: &Args) -> Result<()> {
 
                 hello_packet.tunnel_id = packet.tunnel_id;
                 let hello_packet = hello_packet.to_buf();
+
+                let quic_bi = connection
+                    .open_bi()
+                    .await
+                    .map_err(|e| anyhow!("failed to open stream: {}", e))?;
+                let stream = ConnectorStream::Quic(quic_bi);
                 tokio::task::spawn(async move {
                     let res = spawn_tunnel(
+                        stream,
                         hello_packet,
                         settings,
                         packet.ssl,
@@ -226,6 +233,7 @@ async fn connector(args: &Args) -> Result<()> {
 }
 
 async fn spawn_tunnel(
+    mut tunnel_stream: ConnectorStream,
     hello_packet: [u8; 80],
     settings: TunnelSettings,
     ssl: bool,
@@ -238,26 +246,6 @@ async fn spawn_tunnel(
         return Err(anyhow!("Requested time exceeded max request time."));
     }
 
-    let mut endpoint = Endpoint::client(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))?;
-    endpoint.set_default_client_config(ClientConfig::new(Arc::new(QuicClientConfig::try_from(
-        rustls::ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(SkipServerVerification::new())
-            .with_no_client_auth(),
-    )?)));
-
-    let connection = endpoint
-        .connect(settings.proxy_addr, "proxy.lan")
-        .unwrap()
-        .await
-        .unwrap();
-
-    let quic_bi = connection
-        .open_bi()
-        .await
-        .map_err(|e| anyhow!("failed to open stream: {}", e))?;
-    let mut tunnel_stream = ConnectorStream::Quic(quic_bi);
-
     /*
     let tunnel_stream = TcpStream::connect(settings.proxy_addr).await?;
     tunnel_stream.set_nodelay(true)?;
@@ -268,7 +256,6 @@ async fn spawn_tunnel(
     if settings.serve_files {
         _ = serve::serve_files(&mut tunnel_stream, settings.files_index).await;
         tunnel_stream.flush().await?;
-        tokio::time::sleep(Duration::from_millis(100)).await;
         _ = tunnel_stream.shutdown().await;
         return Ok(());
     }

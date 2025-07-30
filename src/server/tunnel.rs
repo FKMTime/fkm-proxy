@@ -1,7 +1,8 @@
 use crate::structs::{SharedProxyState, TunnelError, TunnelRequest, TunnelSender};
 use anyhow::{Result, anyhow};
 use fkm_proxy::utils::{
-    ConnectorPacket, ConnectorPacketType, HelloPacket, HelloPacketType, send_string_to_stream,
+    ConnectorPacket, ConnectorPacketType, ConnectorStream, HelloPacket, HelloPacketType,
+    send_string_to_stream,
 };
 use kanal::AsyncReceiver;
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
@@ -9,7 +10,7 @@ use tokio::{
     io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
-use tokio_rustls::{TlsAcceptor, TlsConnector, client::TlsStream, rustls::pki_types};
+use tokio_rustls::{TlsAcceptor, TlsConnector, rustls::pki_types};
 
 const PANEL_HTML: &str = include_str!("./resources/index.html");
 const ERROR_HTML: &str = include_str!("./resources/error.html");
@@ -66,9 +67,11 @@ async fn connector_handler(
     state: SharedProxyState,
     connector: Arc<TlsConnector>,
 ) -> Result<()> {
-    let mut stream = connector
+    let stream = connector
         .connect(pki_types::ServerName::try_from("proxy.lan")?, stream)
         .await?;
+
+    let mut stream = ConnectorStream::TcpTls(Box::new(stream));
 
     let mut connection_buff = [0u8; HelloPacket::buf_size()];
     stream.read_exact(&mut connection_buff).await?;
@@ -94,7 +97,7 @@ async fn connector_handler(
 
         tracing::warn!("Closing tunnel with reason: Wrong token");
         tokio::time::sleep(Duration::from_millis(100)).await;
-        _ = stream.get_mut().0.shutdown().await;
+        stream.shutdown().await;
         return Ok(());
     };
 
@@ -129,7 +132,7 @@ async fn connector_handler(
         if matches!(res, Ok(true)) {
             state.remove_tunnel(hello_packet.token).await;
         }
-        _ = stream.get_mut().0.shutdown().await;
+        stream.shutdown().await;
     } else if hello_packet.hp_type == HelloPacketType::Tunnel {
         // im the tunnel!
         let tx = state
@@ -144,7 +147,7 @@ async fn connector_handler(
 }
 
 async fn connector_loop(
-    stream: &mut TlsStream<TcpStream>,
+    stream: &mut ConnectorStream,
     rx: AsyncReceiver<TunnelRequest>,
 ) -> Result<bool> {
     let mut pinger = tokio::time::interval(Duration::from_secs(15));

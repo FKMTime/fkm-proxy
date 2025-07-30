@@ -1,12 +1,10 @@
+use fkm_proxy::utils::ConnectorStream;
 use kanal::AsyncSender;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use thiserror::Error;
-use tokio::{
-    net::TcpStream,
-    sync::{RwLock, oneshot::Sender},
-};
-use tokio_rustls::{TlsAcceptor, TlsConnector, client::TlsStream, rustls::crypto::CryptoProvider};
+use tokio::sync::{RwLock, oneshot::Sender};
+use tokio_rustls::{TlsAcceptor, TlsConnector, rustls::crypto::CryptoProvider};
 
 /// Enum used to request tunnel from connector
 pub enum TunnelRequest {
@@ -18,7 +16,7 @@ pub type TunnelSender = AsyncSender<TunnelRequest>;
 
 pub struct InnerProxyState {
     pub tunnels: HashMap<u128, (bool, TunnelSender)>,
-    pub requests: HashMap<u128, Sender<TlsStream<TcpStream>>>,
+    pub requests: HashMap<u128, Sender<ConnectorStream>>,
     pub domains: HashMap<String, u128>, // domain -> token
 }
 
@@ -137,15 +135,12 @@ impl SharedProxyState {
         state.tunnels.get(&token).cloned()
     }
 
-    pub async fn insert_tunnel_oneshot(&self, tunnel_id: u128, tx: Sender<TlsStream<TcpStream>>) {
+    pub async fn insert_tunnel_oneshot(&self, tunnel_id: u128, tx: Sender<ConnectorStream>) {
         let mut state = self.inner.write().await;
         state.requests.insert(tunnel_id, tx);
     }
 
-    pub async fn get_tunnel_oneshot(
-        &self,
-        tunnel_id: u128,
-    ) -> Option<Sender<TlsStream<TcpStream>>> {
+    pub async fn get_tunnel_oneshot(&self, tunnel_id: u128) -> Option<Sender<ConnectorStream>> {
         let mut state = self.inner.write().await;
         state.requests.remove(&tunnel_id)
     }

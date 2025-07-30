@@ -1,10 +1,17 @@
 use anyhow::Result;
+use quinn::VarInt;
 use std::{
     net::{SocketAddr, ToSocketAddrs},
+    pin::Pin,
+    task::Context,
     time::Duration,
 };
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::{
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    net::TcpStream,
+};
+use tokio_rustls::client::TlsStream;
 
 pub mod certs;
 pub mod http;
@@ -210,4 +217,74 @@ pub fn read_http_host(in_buffer: &[u8]) -> Result<String> {
 
     let host = String::from_utf8_lossy(&host[5..]).trim().to_string();
     Ok(host)
+}
+
+pub enum ConnectorStream {
+    TcpTls(Box<TlsStream<TcpStream>>),
+    Quic((quinn::SendStream, quinn::RecvStream)),
+}
+
+impl ConnectorStream {
+    pub async fn shutdown(&mut self) {
+        match self {
+            ConnectorStream::TcpTls(stream) => {
+                _ = stream.get_mut().0.shutdown().await;
+            }
+            ConnectorStream::Quic((send, recv)) => {
+                _ = send.shutdown().await;
+                _ = recv.stop(VarInt::from_u32(0));
+            }
+        }
+    }
+}
+
+impl AsyncWrite for ConnectorStream {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::result::Result<usize, std::io::Error>> {
+        match self.get_mut() {
+            ConnectorStream::TcpTls(stream) => Pin::new(stream).poll_write(cx, buf),
+            ConnectorStream::Quic((stream, _)) => {
+                Pin::new(stream).poll_write(cx, buf).map(|r| match r {
+                    Ok(n) => std::io::Result::Ok(n),
+                    Err(e) => std::io::Result::Err(e.into()),
+                })
+            }
+        }
+    }
+
+    fn poll_flush(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> std::task::Poll<std::result::Result<(), std::io::Error>> {
+        match self.get_mut() {
+            ConnectorStream::TcpTls(stream) => Pin::new(stream).poll_flush(cx),
+            ConnectorStream::Quic((stream, _)) => Pin::new(stream).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> std::task::Poll<std::result::Result<(), std::io::Error>> {
+        match self.get_mut() {
+            ConnectorStream::TcpTls(stream) => Pin::new(stream).poll_shutdown(cx),
+            ConnectorStream::Quic((stream, _)) => Pin::new(stream).poll_shutdown(cx),
+        }
+    }
+}
+
+impl AsyncRead for ConnectorStream {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            ConnectorStream::TcpTls(stream) => Pin::new(stream).poll_read(cx, buf),
+            ConnectorStream::Quic((_, stream)) => Pin::new(stream).poll_read(cx, buf),
+        }
+    }
 }

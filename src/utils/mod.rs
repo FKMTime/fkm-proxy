@@ -11,7 +11,6 @@ use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::TcpStream,
 };
-use tokio_rustls::client::TlsStream;
 
 pub mod certs;
 pub mod http;
@@ -220,7 +219,8 @@ pub fn read_http_host(in_buffer: &[u8]) -> Result<String> {
 }
 
 pub enum ConnectorStream {
-    TcpTls(Box<TlsStream<TcpStream>>),
+    TcpTlsClient(Box<tokio_rustls::client::TlsStream<TcpStream>>),
+    TcpTlsServer(Box<tokio_rustls::server::TlsStream<TcpStream>>),
     Quic((quinn::SendStream, quinn::RecvStream)),
 }
 
@@ -228,7 +228,11 @@ impl ConnectorStream {
     pub async fn shutdown(&mut self) {
         tokio::time::sleep(Duration::from_millis(100)).await;
         match self {
-            ConnectorStream::TcpTls(stream) => {
+            ConnectorStream::TcpTlsClient(stream) => {
+                _ = stream.flush().await;
+                _ = stream.shutdown().await;
+            }
+            ConnectorStream::TcpTlsServer(stream) => {
                 _ = stream.flush().await;
                 _ = stream.shutdown().await;
             }
@@ -248,7 +252,8 @@ impl AsyncWrite for ConnectorStream {
         buf: &[u8],
     ) -> std::task::Poll<std::result::Result<usize, std::io::Error>> {
         match self.get_mut() {
-            ConnectorStream::TcpTls(stream) => Pin::new(stream).poll_write(cx, buf),
+            ConnectorStream::TcpTlsClient(stream) => Pin::new(stream).poll_write(cx, buf),
+            ConnectorStream::TcpTlsServer(stream) => Pin::new(stream).poll_write(cx, buf),
             ConnectorStream::Quic((stream, _)) => {
                 Pin::new(stream).poll_write(cx, buf).map(|r| match r {
                     Ok(n) => std::io::Result::Ok(n),
@@ -263,7 +268,8 @@ impl AsyncWrite for ConnectorStream {
         cx: &mut Context<'_>,
     ) -> std::task::Poll<std::result::Result<(), std::io::Error>> {
         match self.get_mut() {
-            ConnectorStream::TcpTls(stream) => Pin::new(stream).poll_flush(cx),
+            ConnectorStream::TcpTlsClient(stream) => Pin::new(stream).poll_flush(cx),
+            ConnectorStream::TcpTlsServer(stream) => Pin::new(stream).poll_flush(cx),
             ConnectorStream::Quic((stream, _)) => Pin::new(stream).poll_flush(cx),
         }
     }
@@ -273,7 +279,8 @@ impl AsyncWrite for ConnectorStream {
         cx: &mut Context<'_>,
     ) -> std::task::Poll<std::result::Result<(), std::io::Error>> {
         match self.get_mut() {
-            ConnectorStream::TcpTls(stream) => Pin::new(stream).poll_shutdown(cx),
+            ConnectorStream::TcpTlsClient(stream) => Pin::new(stream).poll_shutdown(cx),
+            ConnectorStream::TcpTlsServer(stream) => Pin::new(stream).poll_shutdown(cx),
             ConnectorStream::Quic((stream, _)) => Pin::new(stream).poll_shutdown(cx),
         }
     }
@@ -286,7 +293,8 @@ impl AsyncRead for ConnectorStream {
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
         match self.get_mut() {
-            ConnectorStream::TcpTls(stream) => Pin::new(stream).poll_read(cx, buf),
+            ConnectorStream::TcpTlsClient(stream) => Pin::new(stream).poll_read(cx, buf),
+            ConnectorStream::TcpTlsServer(stream) => Pin::new(stream).poll_read(cx, buf),
             ConnectorStream::Quic((_, stream)) => Pin::new(stream).poll_read(cx, buf),
         }
     }

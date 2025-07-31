@@ -49,6 +49,9 @@ struct Args {
 
     #[arg(long, action, short = 'i')]
     files_index: bool,
+
+    #[arg(long, action, env = "USE_QUIC")]
+    use_quic: bool,
 }
 
 #[derive(Debug)]
@@ -87,41 +90,49 @@ async fn main() -> Result<()> {
 }
 
 async fn connector(args: &Args) -> Result<()> {
-    let mut endpoint = Endpoint::client(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0))?;
-    endpoint.set_default_client_config(ClientConfig::new(Arc::new(QuicClientConfig::try_from(
-        rustls::ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(SkipServerVerification::new())
-            .with_no_client_auth(),
-    )?)));
+    let mut stream = if args.use_quic {
+        let mut endpoint = Endpoint::client(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0))?;
+        endpoint.set_default_client_config(ClientConfig::new(Arc::new(
+            QuicClientConfig::try_from(
+                rustls::ClientConfig::builder()
+                    .dangerous()
+                    .with_custom_certificate_verifier(SkipServerVerification::new())
+                    .with_no_client_auth(),
+            )?,
+        )));
 
-    let connection = endpoint
-        .connect(args.proxy_addr, "proxy.lan")
-        .unwrap()
-        .await
-        .unwrap();
+        // TODO: add connection as Arc to be available for other threads (to open_bi in tasks),
+        // also make socket inner data that will store it, and for example function to establish
+        // connection on ConnectorStream
+        let connection = endpoint
+            .connect(args.proxy_addr, "proxy.lan")
+            .unwrap()
+            .await
+            .unwrap();
 
-    let quic_bi = connection
-        .open_bi()
-        .await
-        .map_err(|e| anyhow!("failed to open stream: {}", e))?;
-    let mut stream = ConnectorStream::Quic(quic_bi);
+        let quic_bi = connection
+            .open_bi()
+            .await
+            .map_err(|e| anyhow!("failed to open stream: {}", e))?;
+        ConnectorStream::Quic(quic_bi)
+    } else {
+        let CertifiedKey { cert, signing_key } =
+            rcgen::generate_simple_self_signed(vec!["proxy.lan".to_string()])?;
+        let crt = cert_from_str(&cert.pem())?;
+        let key = key_from_str(&signing_key.serialize_pem())?;
+
+        let config = tokio_rustls::rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(crt, key)?;
+
+        let acceptor = Arc::new(tokio_rustls::TlsAcceptor::from(Arc::new(config)));
+
+        let stream = TcpStream::connect(&args.proxy_addr).await?;
+        ConnectorStream::TcpTlsServer(Box::new(acceptor.accept(stream).await?))
+    };
 
     /*
-       let CertifiedKey { cert, signing_key } =
-       rcgen::generate_simple_self_signed(vec!["proxy.lan".to_string()])?;
-       let crt = cert_from_str(&cert.pem())?;
-       let key = key_from_str(&signing_key.serialize_pem())?;
-
-       let config = tokio_rustls::rustls::ServerConfig::builder()
-       .with_no_client_auth()
-       .with_single_cert(crt, key)?;
-
-    let acceptor = Arc::new(tokio_rustls::TlsAcceptor::from(Arc::new(config)));
-
-    let stream = TcpStream::connect(&args.proxy_addr).await?;
-    let mut stream = acceptor.accept(stream).await?;
-    */
+     */
     let mut buf = [0; ConnectorPacket::buf_size()];
 
     let mut hello_packet = HelloPacket {
@@ -201,6 +212,7 @@ async fn connector(args: &Args) -> Result<()> {
                 hello_packet.tunnel_id = packet.tunnel_id;
                 let hello_packet = hello_packet.to_buf();
 
+                // FIXME: move it to spawn_tunnel, after TODO is done (from above)
                 let quic_bi = connection
                     .open_bi()
                     .await

@@ -2,13 +2,11 @@ use anyhow::{Result, anyhow};
 use clap::{Parser, command};
 use fkm_proxy::utils::{
     ConnectorPacket, ConnectorPacketType, ConnectorStream, HelloPacket,
-    certs::{cert_from_str, key_from_str},
     http::{construct_http_redirect, write_http_resp},
     parse_socketaddr, read_string_from_stream,
 };
-use quinn::{ClientConfig, Endpoint, crypto::rustls::QuicClientConfig};
-use rcgen::CertifiedKey;
-use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+use quinn::{ClientConfig, Connection, Endpoint, crypto::rustls::QuicClientConfig};
+use rustls::pki_types::{self, CertificateDer, ServerName, UnixTime};
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::Arc,
@@ -19,7 +17,11 @@ use tokio::{
     net::TcpStream,
     time::Instant,
 };
+use tokio_rustls::TlsConnector;
 
+use crate::cert::NoCertVerification;
+
+mod cert;
 mod serve;
 
 const MAX_REQUEST_TIME: u128 = 1000;
@@ -61,9 +63,17 @@ struct TunnelSettings {
     ssl_addr: SocketAddr,
     nonssl_addr: SocketAddr,
     redirect_ssl: bool,
+    use_quic: bool,
 
     serve_files: bool,
     files_index: bool,
+}
+
+#[derive(Clone)]
+struct ConnectionOpener {
+    quic_endpoint: Endpoint,
+    quic_connection: Option<Connection>,
+    tls_connector: Arc<TlsConnector>,
 }
 
 #[tokio::main]
@@ -90,49 +100,55 @@ async fn main() -> Result<()> {
 }
 
 async fn connector(args: &Args) -> Result<()> {
+    let mut endpoint = Endpoint::client(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0))?;
+    endpoint.set_default_client_config(ClientConfig::new(Arc::new(QuicClientConfig::try_from(
+        rustls::ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(SkipServerVerification::new())
+            .with_no_client_auth(),
+    )?)));
+
+    let config = tokio_rustls::rustls::ClientConfig::builder()
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(NoCertVerification))
+        .with_no_client_auth();
+    let connector = TlsConnector::from(Arc::new(config));
+
+    let mut opener = ConnectionOpener {
+        quic_endpoint: endpoint,
+        quic_connection: None,
+        tls_connector: Arc::new(connector),
+    };
+    if args.use_quic {
+        opener.quic_connection = Some(
+            opener
+                .quic_endpoint
+                .connect(args.proxy_addr, "proxy.lan")?
+                .await?,
+        );
+    }
+
+    let opener = Arc::new(opener);
     let mut stream = if args.use_quic {
-        let mut endpoint = Endpoint::client(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0))?;
-        endpoint.set_default_client_config(ClientConfig::new(Arc::new(
-            QuicClientConfig::try_from(
-                rustls::ClientConfig::builder()
-                    .dangerous()
-                    .with_custom_certificate_verifier(SkipServerVerification::new())
-                    .with_no_client_auth(),
-            )?,
-        )));
-
-        // TODO: add connection as Arc to be available for other threads (to open_bi in tasks),
-        // also make socket inner data that will store it, and for example function to establish
-        // connection on ConnectorStream
-        let connection = endpoint
-            .connect(args.proxy_addr, "proxy.lan")
+        let quic_bi = opener
+            .quic_connection
+            .as_ref()
             .unwrap()
-            .await
-            .unwrap();
-
-        let quic_bi = connection
             .open_bi()
             .await
             .map_err(|e| anyhow!("failed to open stream: {}", e))?;
         ConnectorStream::Quic(quic_bi)
     } else {
-        let CertifiedKey { cert, signing_key } =
-            rcgen::generate_simple_self_signed(vec!["proxy.lan".to_string()])?;
-        let crt = cert_from_str(&cert.pem())?;
-        let key = key_from_str(&signing_key.serialize_pem())?;
-
-        let config = tokio_rustls::rustls::ServerConfig::builder()
-            .with_no_client_auth()
-            .with_single_cert(crt, key)?;
-
-        let acceptor = Arc::new(tokio_rustls::TlsAcceptor::from(Arc::new(config)));
-
         let stream = TcpStream::connect(&args.proxy_addr).await?;
-        ConnectorStream::TcpTlsServer(Box::new(acceptor.accept(stream).await?))
+        stream.set_nodelay(true)?;
+        let stream = opener
+            .tls_connector
+            .connect(pki_types::ServerName::try_from("proxy.lan")?, stream)
+            .await?;
+
+        ConnectorStream::TcpTlsClient(Box::new(stream))
     };
 
-    /*
-     */
     let mut buf = [0; ConnectorPacket::buf_size()];
 
     let mut hello_packet = HelloPacket {
@@ -197,13 +213,14 @@ async fn connector(args: &Args) -> Result<()> {
                 }
 
                 let domain = domain.to_string();
-                //let acceptor = acceptor.clone();
+                let opener = opener.clone();
                 let requested_time = Instant::now();
                 let settings = TunnelSettings {
                     proxy_addr: args.proxy_addr,
                     ssl_addr: args.ssl_addr.unwrap_or(args.addr),
                     nonssl_addr: args.addr,
                     redirect_ssl: args.redirect_ssl,
+                    use_quic: args.use_quic,
 
                     serve_files: args.serve_files,
                     files_index: args.files_index
@@ -212,21 +229,14 @@ async fn connector(args: &Args) -> Result<()> {
                 hello_packet.tunnel_id = packet.tunnel_id;
                 let hello_packet = hello_packet.to_buf();
 
-                // FIXME: move it to spawn_tunnel, after TODO is done (from above)
-                let quic_bi = connection
-                    .open_bi()
-                    .await
-                    .map_err(|e| anyhow!("failed to open stream: {}", e))?;
-                let stream = ConnectorStream::Quic(quic_bi);
                 tokio::task::spawn(async move {
                     let res = spawn_tunnel(
-                        stream,
+                        opener,
                         hello_packet,
                         settings,
                         packet.ssl,
                         ssl_port,
                         domain,
-                        //acceptor,
                         requested_time,
                     )
                         .await;
@@ -245,26 +255,39 @@ async fn connector(args: &Args) -> Result<()> {
 }
 
 async fn spawn_tunnel(
-    mut tunnel_stream: ConnectorStream,
+    opener: Arc<ConnectionOpener>,
     hello_packet: [u8; 80],
     settings: TunnelSettings,
     ssl: bool,
     ssl_port: u16,
     domain: String,
-    //acceptor: Arc<tokio_rustls::TlsAcceptor>,
     request_time: Instant,
 ) -> Result<()> {
     if request_time.elapsed().as_millis() > MAX_REQUEST_TIME {
         return Err(anyhow!("Requested time exceeded max request time."));
     }
 
-    /*
-    let tunnel_stream = TcpStream::connect(settings.proxy_addr).await?;
-    tunnel_stream.set_nodelay(true)?;
-    let mut tunnel_stream = acceptor.accept(tunnel_stream).await?;
-    */
-    tunnel_stream.write_all(&hello_packet).await?;
+    let mut tunnel_stream = if settings.use_quic {
+        let quic_bi = opener
+            .quic_connection
+            .as_ref()
+            .unwrap()
+            .open_bi()
+            .await
+            .map_err(|e| anyhow!("failed to open stream: {}", e))?;
+        ConnectorStream::Quic(quic_bi)
+    } else {
+        let stream = TcpStream::connect(settings.proxy_addr).await?;
+        stream.set_nodelay(true)?;
+        let stream = opener
+            .tls_connector
+            .connect(pki_types::ServerName::try_from("proxy.lan")?, stream)
+            .await?;
 
+        ConnectorStream::TcpTlsClient(Box::new(stream))
+    };
+
+    tunnel_stream.write_all(&hello_packet).await?;
     if settings.serve_files {
         _ = serve::serve_files(&mut tunnel_stream, settings.files_index).await;
         tunnel_stream.flush().await?;

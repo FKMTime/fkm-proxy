@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use thiserror::Error;
 use tokio::sync::{RwLock, oneshot::Sender};
-use tokio_rustls::{TlsAcceptor, TlsConnector, rustls::crypto::CryptoProvider};
+use tokio_rustls::{TlsAcceptor, rustls::crypto::CryptoProvider};
 
 /// Enum used to request tunnel from connector
 pub enum TunnelRequest {
@@ -26,8 +26,8 @@ pub struct ConstProxyState {
     pub save_path: String,
     pub tunnel_timeout: u64,
 
-    pub tls_acceptor: Arc<TlsAcceptor>,
-    pub tls_connector: Arc<TlsConnector>,
+    pub remote_tls_acceptor: Arc<TlsAcceptor>,
+    pub acceptor: Arc<TlsAcceptor>,
     pub rng: Arc<CryptoProvider>,
 
     pub nonssl_port: u16,
@@ -44,8 +44,8 @@ pub struct SharedProxyState {
 impl SharedProxyState {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        tls_acceptor: TlsAcceptor,
-        tls_connector: TlsConnector,
+        remote_tls_acceptor: TlsAcceptor,
+        acceptor: TlsAcceptor,
         top_domain: String,
         panel_domain: String,
         save_path: String,
@@ -62,8 +62,8 @@ impl SharedProxyState {
                 save_path,
                 tunnel_timeout,
 
-                tls_acceptor: Arc::new(tls_acceptor),
-                tls_connector: Arc::new(tls_connector),
+                remote_tls_acceptor: Arc::new(remote_tls_acceptor),
+                acceptor: Arc::new(acceptor),
                 rng: Arc::new(rng),
 
                 nonssl_port,
@@ -150,12 +150,12 @@ impl SharedProxyState {
         state.tunnels.remove(&token);
     }
 
-    pub async fn get_tls_acceptor(&self) -> Arc<TlsAcceptor> {
-        self.consts.tls_acceptor.clone()
+    pub async fn get_tls_remote_acceptor(&self) -> Arc<TlsAcceptor> {
+        self.consts.remote_tls_acceptor.clone()
     }
 
-    pub async fn get_tls_connector(&self) -> Arc<TlsConnector> {
-        self.consts.tls_connector.clone()
+    pub async fn get_tls_acceptor(&self) -> Arc<TlsAcceptor> {
+        self.consts.acceptor.clone()
     }
 
     pub async fn get_domain_by_token(&self, token: u128) -> Option<String> {

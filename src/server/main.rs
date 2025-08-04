@@ -1,12 +1,14 @@
-use crate::{cert::NoCertVerification, structs::SharedProxyState};
+use crate::structs::SharedProxyState;
 use anyhow::Result;
 use clap::{Parser, command};
-use fkm_proxy::utils::parse_socketaddr;
+use fkm_proxy::utils::{
+    certs::{cert_from_str, key_from_str},
+    parse_socketaddr,
+};
 use rcgen::CertifiedKey;
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
-use tokio_rustls::{TlsAcceptor, TlsConnector};
+use tokio_rustls::TlsAcceptor;
 
-mod cert;
 mod structs;
 mod tunnel;
 
@@ -72,17 +74,23 @@ async fn main() -> Result<()> {
     let config = tokio_rustls::rustls::ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(cert.0, cert.1)?;
+    let remote_acceptor = TlsAcceptor::from(Arc::new(config));
+
+    let CertifiedKey { cert, signing_key } =
+        rcgen::generate_simple_self_signed(vec!["proxy.lan".to_string()])?;
+    let crt = cert_from_str(&cert.pem())?;
+    let key = key_from_str(&signing_key.serialize_pem())?;
+    let config = tokio_rustls::rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(crt, key)?;
     let acceptor = TlsAcceptor::from(Arc::new(config));
 
-    let config = tokio_rustls::rustls::ClientConfig::builder()
-        .dangerous()
-        .with_custom_certificate_verifier(Arc::new(NoCertVerification))
-        .with_no_client_auth();
-    let connector = TlsConnector::from(Arc::new(config));
+    //let stream = TcpStream::connect(&args.proxy_addr).await?;
+    //ConnectorStream::TcpTlsServer(Box::new(acceptor.accept(stream).await?))
 
     let shared_proxy_state = SharedProxyState::new(
+        remote_acceptor,
         acceptor,
-        connector,
         args.domain.clone(),
         args.panel_domain.unwrap_or(args.domain),
         args.save_path,

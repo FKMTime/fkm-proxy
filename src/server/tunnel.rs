@@ -10,7 +10,7 @@ use tokio::{
     io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
-use tokio_rustls::{TlsAcceptor, TlsConnector, rustls::pki_types};
+use tokio_rustls::{TlsAcceptor, rustls::pki_types};
 
 const PANEL_HTML: &str = include_str!("./resources/index.html");
 const ERROR_HTML: &str = include_str!("./resources/error.html");
@@ -50,20 +50,20 @@ pub async fn spawn_tunnel_connector(
 }
 
 async fn connector_listener_tcp(addr: SocketAddr, state: SharedProxyState) -> Result<()> {
-    tracing::info!("Tcp connector listening on: {addr}");
+    tracing::info!("[TCP] Connector listening on: {addr}");
     let listener = TcpListener::bind(addr).await?;
-    let connector = state.get_tls_connector().await;
+    let acceptor = state.get_tls_acceptor().await;
 
     loop {
-        let (stream, _) = listener.accept().await?;
+        let (stream, remote_addr) = listener.accept().await?;
         stream.set_nodelay(true)?;
 
         let state = state.clone();
-        let connector = connector.clone();
+        let acceptor = acceptor.clone();
         tokio::task::spawn(async move {
-            let res = connector_handler_tcp(stream, state, connector).await;
+            let res = connector_handler_tcp(stream, state, acceptor).await;
             if let Err(e) = res {
-                tracing::error!("Tcp connector handler error: {e}");
+                tracing::error!("[TCP] Connector handler from {remote_addr} error: {e}");
             }
         });
     }
@@ -95,7 +95,7 @@ async fn connector_listener_udp(addr: SocketAddr, state: SharedProxyState) -> Re
         let fut = handle_quic_connection(conn, state.clone());
         tokio::spawn(async move {
             if let Err(e) = fut.await {
-                eprintln!("connection failed: {reason}", reason = e.to_string())
+                tracing::error!("[QUIC] Connection failed: {e}")
             }
         });
     }
@@ -105,11 +105,13 @@ async fn connector_listener_udp(addr: SocketAddr, state: SharedProxyState) -> Re
 
 async fn handle_quic_connection(conn: quinn::Incoming, state: SharedProxyState) -> Result<()> {
     let connection = conn.await?;
+    let remote_addr = connection.remote_address();
+
     loop {
         let stream = connection.accept_bi().await;
         let stream = match stream {
             Err(quinn::ConnectionError::ApplicationClosed { .. }) => {
-                eprintln!("connection closed");
+                tracing::info!("[QUIC] Connection from {remote_addr} closed");
                 return Ok(());
             }
             Err(e) => {
@@ -121,7 +123,7 @@ async fn handle_quic_connection(conn: quinn::Incoming, state: SharedProxyState) 
         let fut = connector_handler(ConnectorStream::Quic(stream), state.clone());
         tokio::spawn(async move {
             if let Err(e) = fut.await {
-                eprintln!("failed: {reason}", reason = e.to_string());
+                tracing::error!("[QUIC] Connector handler from {remote_addr} failed: {e}");
             }
         });
     }
@@ -130,13 +132,9 @@ async fn handle_quic_connection(conn: quinn::Incoming, state: SharedProxyState) 
 async fn connector_handler_tcp(
     stream: TcpStream,
     state: SharedProxyState,
-    connector: Arc<TlsConnector>,
+    acceptor: Arc<TlsAcceptor>,
 ) -> Result<()> {
-    let stream = connector
-        .connect(pki_types::ServerName::try_from("proxy.lan")?, stream)
-        .await?;
-
-    let stream = ConnectorStream::TcpTls(Box::new(stream));
+    let stream = ConnectorStream::TcpTlsServer(Box::new(acceptor.accept(stream).await?));
     connector_handler(stream, state).await
 }
 
@@ -172,7 +170,10 @@ async fn connector_handler(mut stream: ConnectorStream, state: SharedProxyState)
 
     // im the connector!
     if hello_packet.hp_type == HelloPacketType::Connector {
-        tracing::info!("Connector connected to url with domain: {domain}");
+        tracing::info!(
+            "Connector({}) connected to url with domain: {domain}",
+            stream.get_name()
+        );
 
         _ = stream
             .write_all(
@@ -273,7 +274,7 @@ async fn connector_loop(
 async fn remote_listener(addr: SocketAddr, state: SharedProxyState, ssl: bool) -> Result<()> {
     tracing::info!("Remote listening on: {addr} (SSL: {ssl})");
     let listener = TcpListener::bind(addr).await?;
-    let acceptor = state.get_tls_acceptor().await;
+    let acceptor = state.get_tls_remote_acceptor().await;
 
     loop {
         let (stream, _) = listener.accept().await?;

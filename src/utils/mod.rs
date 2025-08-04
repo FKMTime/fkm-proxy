@@ -153,7 +153,7 @@ pub fn parse_socketaddr(arg: &str) -> Result<SocketAddr> {
                 }
             }
             Err(e) => {
-                println!("[clap parse_socketaddr] (Try: {}) {e:?}", i + 1);
+                tracing::warn!("[clap parse_socketaddr] (Try: {}) {e:?}", i + 1);
                 std::thread::sleep(Duration::from_millis(5000));
             }
         }
@@ -241,6 +241,14 @@ impl ConnectorStream {
                 _ = send.shutdown().await;
                 _ = recv.stop(VarInt::from_u32(0));
             }
+        }
+    }
+
+    pub const fn get_name(&self) -> &'static str {
+        match &self {
+            ConnectorStream::TcpTlsClient(_) => "TCP",
+            ConnectorStream::TcpTlsServer(_) => "TCP",
+            ConnectorStream::Quic(_) => "UDP",
         }
     }
 }

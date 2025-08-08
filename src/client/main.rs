@@ -119,6 +119,7 @@ async fn connector(args: &Args) -> Result<()> {
         quic_connection: None,
         tls_connector: Arc::new(connector),
     };
+
     if args.use_quic {
         opener.quic_connection = Some(
             opener
@@ -133,10 +134,11 @@ async fn connector(args: &Args) -> Result<()> {
         let quic_bi = opener
             .quic_connection
             .as_ref()
-            .unwrap()
+            .ok_or(anyhow::anyhow!("Quic Connection ref get"))?
             .open_bi()
             .await
             .map_err(|e| anyhow!("failed to open stream: {}", e))?;
+
         ConnectorStream::Quic(quic_bi)
     } else {
         let stream = TcpStream::connect(&args.proxy_addr).await?;
@@ -256,7 +258,7 @@ async fn connector(args: &Args) -> Result<()> {
 
 async fn spawn_tunnel(
     opener: Arc<ConnectionOpener>,
-    hello_packet: [u8; 80],
+    hello_packet: [u8; HelloPacket::buf_size()],
     settings: TunnelSettings,
     ssl: bool,
     ssl_port: u16,
@@ -271,7 +273,7 @@ async fn spawn_tunnel(
         let quic_bi = opener
             .quic_connection
             .as_ref()
-            .unwrap()
+            .ok_or(anyhow::anyhow!("Quic Connection ref get"))?
             .open_bi()
             .await
             .map_err(|e| anyhow!("failed to open stream: {}", e))?;

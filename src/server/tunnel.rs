@@ -1,4 +1,4 @@
-use crate::structs::{SharedProxyState, TunnelError, TunnelRequest, TunnelSender};
+use crate::structs::{SharedProxyState, TunnelError, TunnelGetResult, TunnelRequest, TunnelSender};
 use anyhow::{Result, anyhow};
 use fkm_proxy::utils::{
     ConnectorPacket, ConnectorPacketType, ConnectorStream, HelloPacket, HelloPacketType,
@@ -73,7 +73,7 @@ async fn connector_listener_udp(addr: SocketAddr, state: SharedProxyState) -> Re
     tracing::info!("Udp connector listening on: {addr}");
 
     let (certs, key) = {
-        let cert = rcgen::generate_simple_self_signed(vec!["proxy.local".into()]).unwrap();
+        let cert = rcgen::generate_simple_self_signed(vec!["proxy.local".into()])?;
         let key = pki_types::PrivatePkcs8KeyDer::from(cert.signing_key.serialize_der());
         let key: pki_types::PrivateKeyDer = key.into();
         let cert: pki_types::CertificateDer = cert.cert.into();
@@ -83,10 +83,13 @@ async fn connector_listener_udp(addr: SocketAddr, state: SharedProxyState) -> Re
     let server_crypto = rustls::ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(certs, key)?;
+
     let mut server_config = quinn::ServerConfig::with_crypto(Arc::new(
         quinn::crypto::rustls::QuicServerConfig::try_from(server_crypto)?,
     ));
-    let transport_config = Arc::get_mut(&mut server_config.transport).unwrap();
+
+    let transport_config = Arc::get_mut(&mut server_config.transport)
+        .ok_or(anyhow::anyhow!("Transport config arc get_mut error"))?;
     transport_config.max_concurrent_uni_streams(0_u8.into());
 
     let endpoint = quinn::Endpoint::server(server_config, addr)?;
@@ -283,7 +286,7 @@ async fn remote_listener(addr: SocketAddr, state: SharedProxyState, ssl: bool) -
         let state = state.clone();
         let acceptor = acceptor.clone();
         tokio::task::spawn(async move {
-            let res = handle_client(stream, state, ssl, acceptor).await;
+            let res = handle_http_client(stream, state, ssl, acceptor).await;
             if let Err(e) = res {
                 tracing::error!("Handle client error: {e}");
             }
@@ -291,7 +294,7 @@ async fn remote_listener(addr: SocketAddr, state: SharedProxyState, ssl: bool) -
     }
 }
 
-async fn handle_client(
+async fn handle_http_client(
     mut stream: TcpStream,
     state: SharedProxyState,
     ssl: bool,
@@ -303,7 +306,7 @@ async fn handle_client(
     };
 
     let tunn_res = get_host_tunnel(&state, &host).await;
-    let own_ssl = tunn_res.as_ref().map(|x| x.0).unwrap_or(false);
+    let own_ssl = tunn_res.as_ref().map(|x| x.own_ssl).unwrap_or(false);
 
     if ssl {
         if own_ssl {
@@ -328,7 +331,10 @@ async fn get_host(stream: &mut TcpStream, ssl: bool) -> Result<String> {
             .to_string()
     } else {
         let host = ::fkm_proxy::utils::read_http_host(&in_buffer[..n])?;
-        let host = host.split(":").next().unwrap(); // remove port from host
+        let host = host
+            .split(":")
+            .next()
+            .ok_or(anyhow::anyhow!("Host port doesnt exists."))?; // remove port from host
 
         host.to_owned()
     };
@@ -354,9 +360,14 @@ where
     }
 
     if let Ok(tunn) = get_tunn_or_error(tunn_res, &mut stream).await {
-        let rng = state.consts.rng.secure_random;
         let mut generated_tunnel_id = [0u8; 16];
-        rng.fill(&mut generated_tunnel_id).unwrap();
+        state
+            .consts
+            .rng
+            .secure_random
+            .fill(&mut generated_tunnel_id)
+            .map_err(|_| anyhow::anyhow!("Rng fill error"))?;
+
         let generated_tunnel_id = u128::from_be_bytes(generated_tunnel_id);
 
         let (tx, rx) = tokio::sync::oneshot::channel();
@@ -429,10 +440,9 @@ where
         }
     };
 
-    Ok(tunn.1)
+    Ok(tunn.sender)
 }
 
-pub type TunnelGetResult = Result<(bool, TunnelSender), TunnelError>;
 async fn get_host_tunnel(state: &SharedProxyState, host: &str) -> TunnelGetResult {
     let token = state
         .get_client_token(host)

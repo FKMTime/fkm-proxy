@@ -6,16 +6,25 @@ use thiserror::Error;
 use tokio::sync::{RwLock, oneshot::Sender};
 use tokio_rustls::{TlsAcceptor, rustls::crypto::CryptoProvider};
 
+pub type TunnelSender = AsyncSender<TunnelRequest>;
+pub type TunnelGetResult = Result<Tunnel, TunnelError>;
+
 /// Enum used to request tunnel from connector
 pub enum TunnelRequest {
     Close(String),
     Request { ssl: bool, tunnel_id: u128 },
 }
 
-pub type TunnelSender = AsyncSender<TunnelRequest>;
+/// `own_ssl` - if tunnel serves its own ssl cert
+/// `sender` - tunnel communication channel
+#[derive(Clone)]
+pub struct Tunnel {
+    pub own_ssl: bool,
+    pub sender: TunnelSender,
+}
 
 pub struct InnerProxyState {
-    pub tunnels: HashMap<u128, (bool, TunnelSender)>,
+    pub tunnels: HashMap<u128, Tunnel>,
     pub requests: HashMap<u128, Sender<ConnectorStream>>,
     pub domains: HashMap<String, u128>, // domain -> token
 }
@@ -79,11 +88,14 @@ impl SharedProxyState {
     }
 
     pub async fn generate_new_client(&self, subdomain: &str) -> anyhow::Result<u128> {
-        let rng = self.consts.rng.secure_random;
         let mut token = [0u8; 16];
-        rng.fill(&mut token).unwrap();
-        let token = u128::from_be_bytes(token);
+        self.consts
+            .rng
+            .secure_random
+            .fill(&mut token)
+            .map_err(|_| anyhow::anyhow!("Rng fill error"))?;
 
+        let token = u128::from_be_bytes(token);
         self.insert_client(subdomain, token).await?;
         Ok(token)
     }
@@ -109,11 +121,17 @@ impl SharedProxyState {
 
     pub async fn insert_tunnel_connector(&self, token: u128, tunnel: TunnelSender, own_ssl: bool) {
         let mut state = self.inner.write().await;
-        let old = state.tunnels.insert(token, (own_ssl, tunnel));
+        let old = state.tunnels.insert(
+            token,
+            Tunnel {
+                own_ssl,
+                sender: tunnel,
+            },
+        );
 
         if let Some(old) = old {
             _ = old
-                .1
+                .sender
                 .send(TunnelRequest::Close("Other tunnel connected!".to_string()))
                 .await;
 
@@ -130,7 +148,7 @@ impl SharedProxyState {
         self.consts.tunnel_timeout
     }
 
-    pub async fn get_tunnel_entry(&self, token: u128) -> Option<(bool, TunnelSender)> {
+    pub async fn get_tunnel_entry(&self, token: u128) -> Option<Tunnel> {
         let state = self.inner.read().await;
         state.tunnels.get(&token).cloned()
     }

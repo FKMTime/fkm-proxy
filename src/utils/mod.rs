@@ -53,27 +53,25 @@ impl HelloPacketType {
 
 impl HelloPacket {
     pub const fn buf_size() -> usize {
-        80
+        40
     }
 
-    pub fn to_buf(&self) -> [u8; 80] {
-        let mut tmp = [0; 80];
+    pub fn to_buf(&self) -> [u8; Self::buf_size()] {
+        let mut tmp = [0; Self::buf_size()];
         tmp[0] = self.hp_type.to_u8();
-        //tmp[1..9].copy_from_slice(&self.hash.to_be_bytes());
-        tmp[10..26].copy_from_slice(&self.token.to_be_bytes());
-        tmp[26] = self.own_ssl as u8;
-        tmp[27..43].copy_from_slice(&self.tunnel_id.to_be_bytes());
+        tmp[1..17].copy_from_slice(&self.token.to_be_bytes());
+        tmp[17] = self.own_ssl as u8;
+        tmp[18..34].copy_from_slice(&self.tunnel_id.to_be_bytes());
 
         tmp
     }
 
-    pub fn from_buf(buf: &[u8; 80]) -> Self {
+    pub fn from_buf(buf: &[u8; Self::buf_size()]) -> Self {
         Self {
             hp_type: HelloPacketType::from_u8(buf[0]),
-            //hash: u64::from_be_bytes(buf[1..9].try_into().unwrap()),
-            token: u128::from_be_bytes(buf[10..26].try_into().unwrap()),
-            own_ssl: buf[26] != 0,
-            tunnel_id: u128::from_be_bytes(buf[27..43].try_into().unwrap()),
+            token: u128::from_be_bytes(buf[1..17].try_into().unwrap()),
+            own_ssl: buf[17] != 0,
+            tunnel_id: u128::from_be_bytes(buf[18..34].try_into().unwrap()),
         }
     }
 }
@@ -122,8 +120,8 @@ impl ConnectorPacket {
         20
     }
 
-    pub fn to_buf(&self) -> [u8; 20] {
-        let mut tmp = [0; 20];
+    pub fn to_buf(&self) -> [u8; Self::buf_size()] {
+        let mut tmp = [0; Self::buf_size()];
         tmp[0] = self.packet_type.to_u8();
         tmp[1..17].copy_from_slice(&self.tunnel_id.to_be_bytes());
         tmp[17] = self.ssl as u8;
@@ -131,7 +129,7 @@ impl ConnectorPacket {
         tmp
     }
 
-    pub fn from_buf(buf: &[u8; 20]) -> Self {
+    pub fn from_buf(buf: &[u8; Self::buf_size()]) -> Self {
         Self {
             packet_type: ConnectorPacketType::from_u8(buf[0]),
             tunnel_id: u128::from_be_bytes(buf[1..17].try_into().unwrap()),

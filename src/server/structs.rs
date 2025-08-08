@@ -20,6 +20,7 @@ pub enum TunnelRequest {
 #[derive(Clone)]
 pub struct Tunnel {
     pub own_ssl: bool,
+    pub redirect_ssl: bool,
     pub sender: TunnelSender,
 }
 
@@ -119,12 +120,19 @@ impl SharedProxyState {
         Ok(())
     }
 
-    pub async fn insert_tunnel_connector(&self, token: u128, tunnel: TunnelSender, own_ssl: bool) {
+    pub async fn insert_tunnel_connector(
+        &self,
+        token: u128,
+        tunnel: TunnelSender,
+        own_ssl: bool,
+        redirect_ssl: bool,
+    ) {
         let mut state = self.inner.write().await;
         let old = state.tunnels.insert(
             token,
             Tunnel {
                 own_ssl,
+                redirect_ssl,
                 sender: tunnel,
             },
         );

@@ -2,7 +2,7 @@ use crate::structs::{SharedProxyState, TunnelError, TunnelGetResult, TunnelReque
 use anyhow::{Result, anyhow};
 use fkm_proxy::utils::{
     ConnectorPacket, ConnectorPacketType, ConnectorStream, HelloPacket, HelloPacketType,
-    send_string_to_stream,
+    http::construct_http_redirect, send_string_to_stream,
 };
 use kanal::AsyncReceiver;
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
@@ -194,7 +194,12 @@ async fn connector_handler(mut stream: ConnectorStream, state: SharedProxyState)
 
         let (tx, rx) = kanal::unbounded_async::<TunnelRequest>();
         state
-            .insert_tunnel_connector(hello_packet.token, tx, hello_packet.own_ssl)
+            .insert_tunnel_connector(
+                hello_packet.token,
+                tx,
+                hello_packet.own_ssl,
+                hello_packet.redirect_ssl,
+            )
             .await;
 
         let res = connector_loop(&mut stream, rx).await;
@@ -307,6 +312,7 @@ async fn handle_http_client(
 
     let tunn_res = get_host_tunnel(&state, &host).await;
     let own_ssl = tunn_res.as_ref().map(|x| x.own_ssl).unwrap_or(false);
+    let redirect_ssl = tunn_res.as_ref().map(|x| x.redirect_ssl).unwrap_or(false);
 
     if ssl {
         if own_ssl {
@@ -315,6 +321,23 @@ async fn handle_http_client(
             let stream = acceptor.accept(stream).await?;
             handle_client_inner(stream, state, tunn_res, &host, true).await?;
         }
+    } else if redirect_ssl {
+        // for example: "GET / HTTP1.1"
+        let mut buffer = [0u8; 1];
+        let mut parts = String::new();
+        loop {
+            stream.read_exact(&mut buffer).await?;
+            if buffer[0] == 0x0A {
+                break;
+            }
+            parts.push(buffer[0] as char);
+        }
+
+        let parts = parts.trim().split(" ").collect::<Vec<&str>>();
+        let path = parts[1];
+        let redirect =
+            construct_http_redirect(&format!("https://{host}:{}{path}", state.consts.ssl_port));
+        stream.write_all(redirect.as_bytes()).await?;
     } else {
         handle_client_inner(stream, state, tunn_res, &host, false).await?;
     }

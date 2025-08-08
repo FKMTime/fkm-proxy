@@ -22,6 +22,7 @@ pub struct HelloPacket {
     //pub hash: u64,
     pub token: u128,
     pub own_ssl: bool,
+    pub redirect_ssl: bool,
     pub tunnel_id: u128,
 }
 
@@ -61,7 +62,8 @@ impl HelloPacket {
         tmp[0] = self.hp_type.to_u8();
         tmp[1..17].copy_from_slice(&self.token.to_be_bytes());
         tmp[17] = self.own_ssl as u8;
-        tmp[18..34].copy_from_slice(&self.tunnel_id.to_be_bytes());
+        tmp[18] = self.redirect_ssl as u8;
+        tmp[19..35].copy_from_slice(&self.tunnel_id.to_be_bytes());
 
         tmp
     }
@@ -71,7 +73,8 @@ impl HelloPacket {
             hp_type: HelloPacketType::from_u8(buf[0]),
             token: u128::from_be_bytes(buf[1..17].try_into().unwrap()),
             own_ssl: buf[17] != 0,
-            tunnel_id: u128::from_be_bytes(buf[18..34].try_into().unwrap()),
+            redirect_ssl: buf[18] != 0,
+            tunnel_id: u128::from_be_bytes(buf[19..35].try_into().unwrap()),
         }
     }
 }

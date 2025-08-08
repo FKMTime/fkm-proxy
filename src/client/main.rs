@@ -1,12 +1,10 @@
 use anyhow::{Result, anyhow};
 use clap::{Parser, command};
 use fkm_proxy::utils::{
-    ConnectorPacket, ConnectorPacketType, ConnectorStream, HelloPacket,
-    http::{construct_http_redirect, write_http_resp},
+    ConnectorPacket, ConnectorPacketType, ConnectorStream, HelloPacket, http::write_http_resp,
     parse_socketaddr, read_string_from_stream,
 };
 use quinn::{ClientConfig, Connection, Endpoint, crypto::rustls::QuicClientConfig};
-use rustls::pki_types::{self, CertificateDer, ServerName, UnixTime};
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::Arc,
@@ -19,7 +17,7 @@ use tokio::{
 };
 use tokio_rustls::TlsConnector;
 
-use crate::cert::NoCertVerification;
+use crate::cert::{NoCertVerification, SkipQuicServerVerification};
 
 mod cert;
 mod serve;
@@ -62,7 +60,6 @@ struct TunnelSettings {
     proxy_addr: SocketAddr,
     ssl_addr: SocketAddr,
     nonssl_addr: SocketAddr,
-    redirect_ssl: bool,
     use_quic: bool,
 
     serve_files: bool,
@@ -104,7 +101,7 @@ async fn connector(args: &Args) -> Result<()> {
     endpoint.set_default_client_config(ClientConfig::new(Arc::new(QuicClientConfig::try_from(
         rustls::ClientConfig::builder()
             .dangerous()
-            .with_custom_certificate_verifier(SkipServerVerification::new())
+            .with_custom_certificate_verifier(SkipQuicServerVerification::new())
             .with_no_client_auth(),
     )?)));
 
@@ -145,7 +142,10 @@ async fn connector(args: &Args) -> Result<()> {
         stream.set_nodelay(true)?;
         let stream = opener
             .tls_connector
-            .connect(pki_types::ServerName::try_from("proxy.lan")?, stream)
+            .connect(
+                rustls::pki_types::ServerName::try_from("proxy.lan")?,
+                stream,
+            )
             .await?;
 
         ConnectorStream::TcpTlsClient(Box::new(stream))
@@ -157,6 +157,7 @@ async fn connector(args: &Args) -> Result<()> {
         hp_type: fkm_proxy::utils::HelloPacketType::Connector,
         token: args.token,
         own_ssl: args.ssl_addr.is_some(),
+        redirect_ssl: args.redirect_ssl,
         tunnel_id: 0,
     };
 
@@ -214,14 +215,12 @@ async fn connector(args: &Args) -> Result<()> {
                     return Ok(());
                 }
 
-                let domain = domain.to_string();
                 let opener = opener.clone();
                 let requested_time = Instant::now();
                 let settings = TunnelSettings {
                     proxy_addr: args.proxy_addr,
                     ssl_addr: args.ssl_addr.unwrap_or(args.addr),
                     nonssl_addr: args.addr,
-                    redirect_ssl: args.redirect_ssl,
                     use_quic: args.use_quic,
 
                     serve_files: args.serve_files,
@@ -237,8 +236,6 @@ async fn connector(args: &Args) -> Result<()> {
                         hello_packet,
                         settings,
                         packet.ssl,
-                        ssl_port,
-                        domain,
                         requested_time,
                     )
                         .await;
@@ -261,8 +258,6 @@ async fn spawn_tunnel(
     hello_packet: [u8; HelloPacket::buf_size()],
     settings: TunnelSettings,
     ssl: bool,
-    ssl_port: u16,
-    domain: String,
     request_time: Instant,
 ) -> Result<()> {
     if request_time.elapsed().as_millis() > MAX_REQUEST_TIME {
@@ -283,7 +278,10 @@ async fn spawn_tunnel(
         stream.set_nodelay(true)?;
         let stream = opener
             .tls_connector
-            .connect(pki_types::ServerName::try_from("proxy.lan")?, stream)
+            .connect(
+                rustls::pki_types::ServerName::try_from("proxy.lan")?,
+                stream,
+            )
             .await?;
 
         ConnectorStream::TcpTlsClient(Box::new(stream))
@@ -297,101 +295,27 @@ async fn spawn_tunnel(
         return Ok(());
     }
 
-    let redirect_to_ssl = settings.redirect_ssl && !ssl;
-    if redirect_to_ssl {
-        // for example: "GET / HTTP1.1"
-        let mut buffer = [0u8; 1];
-        let mut parts = String::new();
-        loop {
-            tunnel_stream.read_exact(&mut buffer).await?;
-            if buffer[0] == 0x0A {
-                break;
-            }
-            parts.push(buffer[0] as char);
-        }
+    let local_addr = match ssl {
+        true => settings.ssl_addr,
+        false => settings.nonssl_addr,
+    };
 
-        let parts = parts.trim().split(" ").collect::<Vec<&str>>();
-        let path = parts[1];
-        let redirect = construct_http_redirect(&format!("https://{domain}:{ssl_port}/{path}"));
-        tunnel_stream.write_all(redirect.as_bytes()).await?;
-    } else {
-        let local_addr = match ssl {
-            true => settings.ssl_addr,
-            false => settings.nonssl_addr,
-        };
+    let Ok(mut local_stream) = TcpStream::connect(local_addr).await else {
+        write_http_resp(
+            &mut tunnel_stream,
+            500,
+            &ERROR_HTML.replace("{MSG}", "Local server not running!"),
+            "text/html",
+        )
+        .await?;
+        _ = tunnel_stream.shutdown().await;
 
-        let Ok(mut local_stream) = TcpStream::connect(local_addr).await else {
-            write_http_resp(
-                &mut tunnel_stream,
-                500,
-                &ERROR_HTML.replace("{MSG}", "Local server not running!"),
-                "text/html",
-            )
-            .await?;
-            _ = tunnel_stream.shutdown().await;
+        return Ok(());
+    };
 
-            return Ok(());
-        };
-
-        local_stream.set_nodelay(true)?;
-        _ = tokio::io::copy_bidirectional(&mut local_stream, &mut tunnel_stream).await;
-        _ = local_stream.shutdown().await;
-    }
-
+    local_stream.set_nodelay(true)?;
+    _ = tokio::io::copy_bidirectional(&mut local_stream, &mut tunnel_stream).await;
+    _ = local_stream.shutdown().await;
     _ = tunnel_stream.shutdown().await;
     Ok(())
-}
-
-#[derive(Debug)]
-struct SkipServerVerification(Arc<rustls::crypto::CryptoProvider>);
-
-impl SkipServerVerification {
-    fn new() -> Arc<Self> {
-        Arc::new(Self(Arc::new(rustls::crypto::ring::default_provider())))
-    }
-}
-
-impl rustls::client::danger::ServerCertVerifier for SkipServerVerification {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &ServerName<'_>,
-        _ocsp: &[u8],
-        _now: UnixTime,
-    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-        Ok(rustls::client::danger::ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls12_signature(
-            message,
-            cert,
-            dss,
-            &self.0.signature_verification_algorithms,
-        )
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls13_signature(
-            message,
-            cert,
-            dss,
-            &self.0.signature_verification_algorithms,
-        )
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        self.0.signature_verification_algorithms.supported_schemes()
-    }
 }

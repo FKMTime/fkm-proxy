@@ -338,6 +338,8 @@ async fn handle_http_client(
         let redirect =
             construct_http_redirect(&format!("https://{host}:{}{path}", state.consts.ssl_port));
         stream.write_all(redirect.as_bytes()).await?;
+        stream.flush().await?;
+        stream.shutdown().await?;
     } else {
         handle_client_inner(stream, state, tunn_res, &host, false).await?;
     }

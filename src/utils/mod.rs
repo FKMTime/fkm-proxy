@@ -14,12 +14,10 @@ use tokio::{
 
 pub mod certs;
 pub mod http;
-pub mod udp;
 
 #[derive(Debug)]
 pub struct HelloPacket {
     pub hp_type: HelloPacketType,
-    //pub hash: u64,
     pub token: u128,
     pub own_ssl: bool,
     pub redirect_ssl: bool,

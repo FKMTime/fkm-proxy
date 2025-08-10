@@ -16,6 +16,7 @@ pub enum TunnelRequest {
 }
 
 /// `own_ssl` - if tunnel serves its own ssl cert
+/// `redirect_ssl` - if server should redirect http to https automatically
 /// `sender` - tunnel communication channel
 #[derive(Clone)]
 pub struct Tunnel {

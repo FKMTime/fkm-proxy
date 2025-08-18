@@ -1,6 +1,6 @@
 [package]
 name = "fkm-proxy"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 license = "MIT"
 description = "Fkm proxy client & server"
@@ -15,12 +15,12 @@ name = "fkm-proxy-server"
 path = "src/server/main.rs"
 
 [dependencies]
-anyhow = "1.0.98"
+anyhow = "1.0.99"
 kanal = "0.1.1"
-thiserror = "2.0.12"
+thiserror = "2.0.15"
 tokio = { version = "1.47.1", features = ["io-util", "net", "fs", "sync", "signal", "time", "macros", "rt-multi-thread"] }
 tokio-rustls = { version = "0.26.2", features = ["ring", "logging", "tls12"], default-features = false }
-clap = { version = "4.5.43", features = ["derive", "env"] }
+clap = { version = "4.5.45", features = ["derive", "env"] }
 dotenvy = "0.15.7"
 rcgen = "0.14.3"
 tracing = "0.1.41"

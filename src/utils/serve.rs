@@ -1,12 +1,15 @@
-use crate::{ERROR_HTML, LIST_HTML};
 use anyhow::Result;
-use fkm_proxy::utils::http::{construct_raw_http_resp, write_http_resp};
 use std::path::{Path, PathBuf};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+use crate::utils::{
+    client::Consts,
+    http::{construct_raw_http_resp, write_http_resp},
+};
+
 // TODO: cleanup this fucking mess LMAO
 
-pub async fn serve_files<S>(stream: &mut S, files_index: bool) -> Result<()>
+pub async fn serve_files<S>(stream: &mut S, files_index: bool, consts: &Consts) -> Result<()>
 where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
 {
@@ -33,7 +36,7 @@ where
             if metadata.is_dir() {
                 let index_file = local_path.join("index.html");
                 if index_file.exists() {
-                    serve_file(stream, &index_file).await?;
+                    serve_file(stream, &index_file, consts).await?;
                 } else if files_index {
                     let mut generated = String::new();
                     let mut directories = Vec::new();
@@ -117,7 +120,8 @@ where
                     write_http_resp(
                         stream,
                         200,
-                        &LIST_HTML
+                        &consts
+                            .list_html
                             .replace("{CONTENT}", &generated)
                             .replace("{DIR_PATH}", &format!("/{path}")),
                         "text/html",
@@ -127,19 +131,21 @@ where
                     write_http_resp(
                         stream,
                         404,
-                        &ERROR_HTML.replace("{MSG}", "Local file not found!"),
+                        &consts.error_html.replace("{MSG}", "Local file not found!"),
                         "text/html",
                     )
                     .await?;
                 }
             } else if metadata.is_file() {
-                serve_file(stream, &local_path).await?;
+                serve_file(stream, &local_path, consts).await?;
             }
         } else {
             write_http_resp(
                 stream,
                 500,
-                &ERROR_HTML.replace("{MSG}", "File metadata not found!"),
+                &consts
+                    .error_html
+                    .replace("{MSG}", "File metadata not found!"),
                 "text/html",
             )
             .await?;
@@ -148,7 +154,7 @@ where
         write_http_resp(
             stream,
             404,
-            &ERROR_HTML.replace("{MSG}", "Local file not found!"),
+            &consts.error_html.replace("{MSG}", "Local file not found!"),
             "text/html",
         )
         .await?;
@@ -157,7 +163,7 @@ where
     Ok(())
 }
 
-async fn serve_file<S>(stream: &mut S, path: &PathBuf) -> Result<()>
+async fn serve_file<S>(stream: &mut S, path: &PathBuf, consts: &Consts) -> Result<()>
 where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
 {
@@ -176,7 +182,7 @@ where
         write_http_resp(
             stream,
             500,
-            &ERROR_HTML.replace("{MSG}", "Local file read error!"),
+            &consts.error_html.replace("{MSG}", "Local file read error!"),
             "text/html",
         )
         .await?;

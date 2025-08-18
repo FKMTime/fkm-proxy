@@ -60,7 +60,17 @@ struct ConnectionOpener {
     tls_connector: Arc<TlsConnector>,
 }
 
-pub async fn connector(options: &Options) -> Result<()> {
+pub async fn spawn_connector(options: Options) {
+    loop {
+        if let Err(e) = connector(&options).await {
+            tracing::error!("Connector error: {e}");
+        }
+
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+}
+
+async fn connector(options: &Options) -> Result<()> {
     let mut endpoint = Endpoint::client(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0))?;
     endpoint.set_default_client_config(ClientConfig::new(Arc::new(QuicClientConfig::try_from(
         rustls::ClientConfig::builder()

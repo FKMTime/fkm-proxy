@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, command};
 use fkm_proxy::utils::{
-    client::{Consts, Options, connector},
+    client::{Consts, Options, spawn_connector},
     parse_socketaddr,
 };
 use std::net::SocketAddr;
@@ -66,13 +66,6 @@ async fn main() -> Result<()> {
         },
     };
 
-    loop {
-        if let Err(e) = connector(&options).await {
-            tracing::error!("Connector error: {e}");
-        }
-
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    }
-
-    // Ok(())
+    spawn_connector(options).await;
+    Ok(())
 }

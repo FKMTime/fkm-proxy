@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -203,18 +204,14 @@
         }
     </style>
 </head>
+
 <body>
     <div class="container">
         <h1>Proxy Panel</h1>
         <form onsubmit="createTunnel(); return false;" class="form">
             <div class="form-group">
                 <label for="url">Target URL (WITHOUT HTTP/S)</label>
-                <input 
-                    type="text" 
-                    id="url" 
-                    placeholder="example.fkmtime.com"
-                    required
-                >
+                <input type="text" id="url" placeholder="example.fkmtime.com" required>
             </div>
             <button type="submit">Create Tunnel</button>
         </form>
@@ -257,14 +254,14 @@
                 let response = await fetch(`/create?url=${url}`, {
                     method: 'POST',
                 });
-                
+
                 if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
+                    throw new Error(`${await response.text()}`);
                 }
-                
+
                 let json = await response.json();
                 let token = json.token;
-                
+
                 credentialsText.textContent = `TOKEN=${token}`;
                 showModal('credentialsModal');
             } catch (error) {
@@ -298,4 +295,5 @@
         }
     </script>
 </body>
+
 </html>

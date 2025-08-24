@@ -506,15 +506,28 @@ where
             .collect();
 
         let url = search.get("url").ok_or_else(|| anyhow!("No url!"))?;
-        let token = state.generate_new_client(url).await?;
+        let res = state.generate_new_client(url).await;
 
-        let body = format!("{{\"url\":\"{url}\",\"token\":\"{token}\"}}");
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
-            body.len(),
-        );
+        match res {
+            Ok(token) => {
+                let body = format!("{{\"url\":\"{url}\",\"token\":\"{token}\"}}");
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len(),
+                );
 
-        stream.write_all(response.as_bytes()).await?;
+                stream.write_all(response.as_bytes()).await?;
+            }
+            Err(e) => {
+                let body = format!("{e:?}");
+                let response = format!(
+                    "HTTP/1.1 500 Internal Server Error\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len(),
+                );
+
+                stream.write_all(response.as_bytes()).await?;
+            }
+        }
     } else if http_header[1] == "/" && http_header[0] == "GET" {
         _ = fkm_proxy::utils::http::write_http_resp(stream, 200, PANEL_HTML, "text/html").await;
     } else {

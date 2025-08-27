@@ -35,6 +35,8 @@ http = "1.3.1"
 chrono = "0.4.41"
 html-escape = "0.2.13"
 quinn = { version = "0.11.8", features = ["rustls"] }
+russh = { version = "0.54.3", default-features = false, features = ["flate2", "ring", "rsa"] }
+base64 = "0.22.1"
 
 [profile.release]
 opt-level = "z"     # Optimize for size.

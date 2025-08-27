@@ -1,5 +1,6 @@
 use crate::structs::SharedProxyState;
 use anyhow::Result;
+use base64::Engine;
 use clap::{Parser, command};
 use fkm_proxy::utils::{
     certs::{cert_from_str, key_from_str},
@@ -9,6 +10,7 @@ use rcgen::CertifiedKey;
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 use tokio_rustls::TlsAcceptor;
 
+mod ssh;
 mod structs;
 mod tunnel;
 
@@ -70,6 +72,14 @@ async fn main() -> Result<()> {
         let privkey = ::fkm_proxy::utils::certs::load_keys(&args.privkey_path)?;
         (certs, privkey)
     };
+
+    let key_pem = format!(
+        "-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\n",
+        base64::engine::general_purpose::STANDARD.encode(cert.1.secret_der())
+    );
+    println!("key: \n{key_pem}");
+
+    ssh::spawn_ssh_server(key_pem).await?;
 
     let config = tokio_rustls::rustls::ServerConfig::builder()
         .with_no_client_auth()

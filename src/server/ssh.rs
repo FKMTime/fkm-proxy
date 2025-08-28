@@ -1,30 +1,37 @@
 use anyhow::Result;
 use kanal::AsyncSender;
+use russh::keys::PrivateKey;
 use russh::server::{Auth, Msg, Server as _, Session};
 use russh::{Channel, ChannelId, MethodKind, MethodSet, Preferred, Pty};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-pub async fn spawn_ssh_server(pem: Vec<u8>) -> Result<()> {
+pub async fn spawn_ssh_server(key: PrivateKey) -> Result<()> {
     tokio::task::spawn(async move {
-        ssh_server(&pem).await.unwrap();
+        loop {
+            let res = ssh_server(key.clone()).await;
+            if let Err(e) = res {
+                println!("[SSH] SSH Server error {e:?}");
+            }
+
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
     });
 
     Ok(())
 }
 
-async fn ssh_server(pem: &[u8]) -> Result<()> {
+async fn ssh_server(key: PrivateKey) -> Result<()> {
     let mut methods = MethodSet::empty();
     methods.push(MethodKind::Password);
-
-    let k = russh::keys::PrivateKey::from_openssh(pem)?;
 
     let config = russh::server::Config {
         inactivity_timeout: Some(std::time::Duration::from_secs(3600)),
         auth_rejection_time: std::time::Duration::from_secs(3),
         auth_rejection_time_initial: Some(std::time::Duration::from_secs(0)),
-        keys: vec![k],
+        keys: vec![key],
         preferred: Preferred {
             // kex: std::borrow::Cow::Owned(vec![russh::kex::DH_GEX_SHA256]),
             ..Preferred::default()
@@ -44,8 +51,7 @@ async fn ssh_server(pem: &[u8]) -> Result<()> {
         handle.shutdown("Server shutting down after 10 minutes".into());
     });
 
-    //server.await.unwrap()
-
+    server.await?;
     Ok(())
 }
 

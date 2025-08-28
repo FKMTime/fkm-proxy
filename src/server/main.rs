@@ -57,6 +57,22 @@ async fn main() -> Result<()> {
         tokio::fs::create_dir_all(&args.config_path).await?;
     }
 
+    let ssh_path = args.config_path.join("ssh.key");
+    let ssh_key = if !ssh_path.exists() {
+        let key = russh::keys::PrivateKey::random(
+            &mut russh::keys::ssh_key::rand_core::OsRng,
+            russh::keys::Algorithm::Ed25519,
+        )?;
+
+        let key_data = key.to_openssh(russh::keys::ssh_key::LineEnding::LF)?;
+        tokio::fs::write(&ssh_path, key_data).await?;
+
+        key
+    } else {
+        let key_data = tokio::fs::read(&ssh_path).await?;
+        russh::keys::PrivateKey::from_openssh(&key_data)?
+    };
+
     let cert = if args.generate_cert {
         let CertifiedKey { cert, signing_key } =
             rcgen::generate_simple_self_signed(vec![args.domain.clone()])?;
@@ -69,7 +85,7 @@ async fn main() -> Result<()> {
         (certs, privkey)
     };
 
-    //ssh::spawn_ssh_server(private_key_der_to_pem_bytes(&cert.1)).await?;
+    ssh::spawn_ssh_server(ssh_key).await?;
 
     let config = tokio_rustls::rustls::ServerConfig::builder()
         .with_no_client_auth()

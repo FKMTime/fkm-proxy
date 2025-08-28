@@ -6,7 +6,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-pub async fn spawn_ssh_server(pem: String) -> Result<()> {
+pub async fn spawn_ssh_server(pem: Vec<u8>) -> Result<()> {
     tokio::task::spawn(async move {
         ssh_server(&pem).await.unwrap();
     });
@@ -14,7 +14,7 @@ pub async fn spawn_ssh_server(pem: String) -> Result<()> {
     Ok(())
 }
 
-async fn ssh_server(pem: &str) -> Result<()> {
+async fn ssh_server(pem: &[u8]) -> Result<()> {
     let mut methods = MethodSet::empty();
     methods.push(MethodKind::Password);
 

@@ -1,7 +1,7 @@
 use fkm_proxy::utils::ConnectorStream;
 use kanal::AsyncSender;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
 use thiserror::Error;
 use tokio::sync::{RwLock, oneshot::Sender};
 use tokio_rustls::{TlsAcceptor, rustls::crypto::CryptoProvider};
@@ -34,7 +34,7 @@ pub struct InnerProxyState {
 pub struct ConstProxyState {
     pub panel_domain: String,
     pub top_domain: String,
-    pub save_path: String,
+    pub save_path: PathBuf,
     pub tunnel_timeout: u64,
 
     pub remote_tls_acceptor: Arc<TlsAcceptor>,
@@ -59,7 +59,7 @@ impl SharedProxyState {
         acceptor: TlsAcceptor,
         top_domain: String,
         panel_domain: String,
-        save_path: String,
+        save_path: PathBuf,
         tunnel_timeout: u64,
         nonssl_port: u16,
         ssl_port: u16,

@@ -1,4 +1,6 @@
 use anyhow::Result;
+use fkm_proxy::utils::ConnectorStream;
+use fkm_proxy::utils::ssh::SshPacketHeader;
 use kanal::AsyncSender;
 use russh::keys::PrivateKey;
 use russh::server::{Auth, Msg, Server as _, Session};
@@ -9,7 +11,7 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use crate::structs::SharedProxyState;
+use crate::structs::{SharedProxyState, TunnelError, TunnelRequest};
 
 pub async fn spawn_ssh_server(
     bind: SocketAddr,
@@ -47,7 +49,10 @@ async fn ssh_server(bind: &SocketAddr, key: PrivateKey, state: SharedProxyState)
         ..Default::default()
     };
     let config = Arc::new(config);
-    let mut sh = Server { state, tx: None };
+    let mut sh = Server {
+        state,
+        stream: None,
+    };
 
     let socket = TcpListener::bind(bind).await.unwrap();
     let server = sh.run_on_socket(config, &socket);
@@ -66,7 +71,7 @@ async fn ssh_server(bind: &SocketAddr, key: PrivateKey, state: SharedProxyState)
 
 struct Server {
     state: SharedProxyState,
-    tx: Option<AsyncSender<ChannelData>>,
+    stream: Option<ConnectorStream>,
 }
 
 enum ChannelData {
@@ -79,7 +84,7 @@ impl russh::server::Server for Server {
     fn new_client(&mut self, _: Option<std::net::SocketAddr>) -> Self {
         Server {
             state: self.state.clone(),
-            tx: None,
+            stream: None,
         }
     }
 
@@ -96,46 +101,72 @@ impl russh::server::Handler for Server {
         channel: Channel<Msg>,
         session: &mut Session,
     ) -> Result<bool, Self::Error> {
-        let (tx, rx) = kanal::unbounded_async::<ChannelData>();
-
-        self.tx = Some(tx);
         let ret = (channel.id(), session.handle());
-        tokio::task::spawn(async move {
-            let mut stream = TcpStream::connect("127.0.0.1:5321").await.unwrap();
+        if let Some(mut stream) = self.stream.take() {
+            tokio::task::spawn(async move {
+                let mut header_buf = [0; SshPacketHeader::HEADER_LENGTH];
+                let mut buf = [0; 4096];
 
-            loop {
-                tokio::select! {
-                    recv = rx.recv() => {
-                        if let Ok(recv) = recv {
-                            match recv {
-                                ChannelData::PtyResize { rows, cols } => {
-                                    stream.write_u8(2).await.unwrap();
-                                    stream.write_u16(rows as u16).await.unwrap();
-                                    stream.write_u16(cols as u16).await.unwrap();
-                                },
-                                ChannelData::Data(data) => {
-                                    stream.write_u8(1).await.unwrap();
-                                    stream.write_u16(data.len() as u16).await.unwrap();
-                                    stream.write_all(&data).await.unwrap();
+                loop {
+                    stream.read_exact(&mut header_buf).await.unwrap();
+                    let header = SshPacketHeader::from_buf(&header_buf);
+
+                    match header.packet_type {
+                        fkm_proxy::utils::ssh::SshPacketType::Data => {
+                            // TODO: calc reamning etc to buf size
+                            stream
+                                .read_exact(&mut buf[..header.length as usize])
+                                .await
+                                .unwrap();
+
+                            ret.1
+                                .data(ret.0, buf[..header.length as usize].into())
+                                .await
+                                .unwrap();
+                        }
+                        _ => {}
+                    }
+                }
+                /*
+                let mut stream = TcpStream::connect("127.0.0.1:5321").await.unwrap();
+
+                loop {
+                    tokio::select! {
+                        recv = rx.recv() => {
+                            if let Ok(recv) = recv {
+                                match recv {
+                                    ChannelData::PtyResize { rows, cols } => {
+                                        stream.write_u8(2).await.unwrap();
+                                        stream.write_u16(rows as u16).await.unwrap();
+                                        stream.write_u16(cols as u16).await.unwrap();
+                                    },
+                                    ChannelData::Data(data) => {
+                                        stream.write_u8(1).await.unwrap();
+                                        stream.write_u16(data.len() as u16).await.unwrap();
+                                        stream.write_all(&data).await.unwrap();
+                                    }
+                                }
+                            }
+                        }
+                        recv = stream.read_u8() => {
+                            if let Ok(recv) = recv {
+                                if recv == 1 {
+                                    let n = stream.read_u16().await.unwrap() as usize;
+                                    let mut buf = vec![0; n];
+                                    stream.read_exact(&mut buf[..n]).await.unwrap();
+                                    ret.1.data(ret.0, buf[..n].into()).await.unwrap();
                                 }
                             }
                         }
                     }
-                    recv = stream.read_u8() => {
-                        if let Ok(recv) = recv {
-                            if recv == 1 {
-                                let n = stream.read_u16().await.unwrap() as usize;
-                                let mut buf = vec![0; n];
-                                stream.read_exact(&mut buf[..n]).await.unwrap();
-                                ret.1.data(ret.0, buf[..n].into()).await.unwrap();
-                            }
-                        }
-                    }
                 }
-            }
-        });
+                */
+            });
 
-        Ok(true)
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 
     async fn auth_password(&mut self, user: &str, password: &str) -> Result<Auth, Self::Error> {
@@ -143,14 +174,56 @@ impl russh::server::Handler for Server {
         methods.push(MethodKind::Password);
         println!("{user} {password}");
 
-        if password == "123" {
-            Ok(Auth::Accept)
-        } else {
-            Ok(Auth::Reject {
-                proceed_with_methods: Some(methods),
-                partial_success: false,
-            })
+        if let Ok(token) = password.parse() {
+            if let Some(tunn) = self.state.get_tunnel_entry(token).await {
+                let mut generated_tunnel_id = [0u8; 16];
+                self.state
+                    .consts
+                    .rng
+                    .secure_random
+                    .fill(&mut generated_tunnel_id)
+                    .unwrap();
+
+                let generated_tunnel_id = u128::from_be_bytes(generated_tunnel_id);
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                self.state
+                    .insert_tunnel_oneshot(generated_tunnel_id, tx)
+                    .await;
+
+                tunn.sender
+                    .send(TunnelRequest::Request {
+                        ssl: false,
+                        ssh: true,
+                        tunnel_id: generated_tunnel_id,
+                    })
+                    .await
+                    .unwrap();
+
+                let tunnel_res = tokio::time::timeout(
+                    Duration::from_millis(self.state.get_tunnel_timeout().await),
+                    rx,
+                )
+                .await;
+
+                if tunnel_res.is_err() {
+                    _ = self.state.get_tunnel_oneshot(generated_tunnel_id).await;
+
+                    return Ok(Auth::Reject {
+                        proceed_with_methods: Some(methods),
+                        partial_success: false,
+                    });
+                }
+
+                self.stream = Some(tunnel_res.unwrap().unwrap());
+                return Ok(Auth::Accept);
+            }
         }
+
+        Ok(Auth::Reject {
+            proceed_with_methods: Some(methods),
+            partial_success: false,
+        })
     }
 
     async fn data(
@@ -171,9 +244,11 @@ impl russh::server::Handler for Server {
         session.data(channel, data)?;
         */
 
+        /*
         if let Some(tx) = &mut self.tx {
             tx.send(ChannelData::Data(data.to_vec())).await.unwrap();
         }
+        */
         Ok(())
     }
 
@@ -188,6 +263,7 @@ impl russh::server::Handler for Server {
         modes: &[(Pty, u32)],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
+        /*
         if let Some(tx) = &mut self.tx {
             tx.send(ChannelData::PtyResize {
                 rows: row_height as u16,
@@ -196,6 +272,7 @@ impl russh::server::Handler for Server {
             .await
             .unwrap();
         }
+        */
 
         println!("pty req {term} {col_width} {row_height} {pix_width}px {pix_height}px");
         Ok(())
@@ -210,6 +287,7 @@ impl russh::server::Handler for Server {
         pix_height: u32,
         session: &mut Session,
     ) -> Result<(), Self::Error> {
+        /*
         if let Some(tx) = &mut self.tx {
             tx.send(ChannelData::PtyResize {
                 rows: row_height as u16,
@@ -218,6 +296,7 @@ impl russh::server::Handler for Server {
             .await
             .unwrap();
         }
+        */
 
         println!("chg {col_width} {row_height} {pix_width}px {pix_height}px");
         Ok(())

@@ -59,6 +59,7 @@ async fn main() -> Result<()> {
         files_index: args.files_index,
         serve_files: args.serve_files,
         quic: args.use_quic,
+        ssh_cmd: None,
         consts: Consts {
             max_req_time: MAX_REQUEST_TIME,
             error_html: ERROR_HTML,

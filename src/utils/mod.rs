@@ -16,6 +16,7 @@ pub mod certs;
 pub mod client;
 pub mod http;
 pub mod serve;
+pub mod ssh;
 
 #[derive(Debug)]
 pub struct HelloPacket {

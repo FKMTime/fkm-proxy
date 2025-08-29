@@ -17,6 +17,7 @@ use crate::utils::{
     certs::{NoCertVerification, SkipQuicServerVerification},
     http::write_http_resp,
     read_string_from_stream,
+    ssh::SshPacketHeader,
 };
 
 pub struct Options {
@@ -28,6 +29,7 @@ pub struct Options {
     pub serve_files: bool,
     pub files_index: bool,
     pub quic: bool,
+    pub ssh_cmd: Option<String>,
 
     pub consts: Consts,
 }
@@ -46,6 +48,7 @@ struct TunnelSettings {
     ssl_addr: SocketAddr,
     nonssl_addr: SocketAddr,
     use_quic: bool,
+    ssh_cmd: Option<String>,
 
     serve_files: bool,
     files_index: bool,
@@ -197,6 +200,7 @@ async fn connector(options: &Options) -> Result<()> {
                     ssl_addr: options.local_ssl.unwrap_or(options.local),
                     nonssl_addr: options.local,
                     use_quic: options.quic,
+                    ssh_cmd: options.ssh_cmd.clone(),
 
                     serve_files: options.serve_files,
                     files_index: options.files_index,
@@ -207,14 +211,24 @@ async fn connector(options: &Options) -> Result<()> {
                 let hello_packet = hello_packet.to_buf();
 
                 tokio::task::spawn(async move {
-                    let res = spawn_tunnel(
-                        opener,
-                        hello_packet,
-                        settings,
-                        packet.ssl,
-                        requested_time,
-                    )
-                        .await;
+                    let res = if packet.ssh {
+                        spawn_ssh_tunnel(
+                            opener,
+                            hello_packet,
+                            settings,
+                            requested_time,
+                        )
+                            .await
+                    } else {
+                        spawn_tunnel(
+                            opener,
+                            hello_packet,
+                            settings,
+                            packet.ssl,
+                            requested_time,
+                        )
+                            .await
+                    };
 
                     if let Err(e) = res {
                         tracing::error!("Tunnel Error: {e}");
@@ -229,13 +243,12 @@ async fn connector(options: &Options) -> Result<()> {
     }
 }
 
-async fn spawn_tunnel(
+async fn establish_connection(
     opener: Arc<ConnectionOpener>,
     hello_packet: [u8; HelloPacket::buf_size()],
-    settings: TunnelSettings,
-    ssl: bool,
+    settings: &TunnelSettings,
     request_time: Instant,
-) -> Result<()> {
+) -> Result<ConnectorStream> {
     if request_time.elapsed().as_millis() > settings.consts.max_req_time {
         return Err(anyhow!("Requested time exceeded max request time."));
     }
@@ -264,6 +277,19 @@ async fn spawn_tunnel(
     };
 
     tunnel_stream.write_all(&hello_packet).await?;
+    Ok(tunnel_stream)
+}
+
+async fn spawn_tunnel(
+    opener: Arc<ConnectionOpener>,
+    hello_packet: [u8; HelloPacket::buf_size()],
+    settings: TunnelSettings,
+    ssl: bool,
+    request_time: Instant,
+) -> Result<()> {
+    let mut tunnel_stream =
+        establish_connection(opener, hello_packet, &settings, request_time).await?;
+
     if settings.serve_files {
         _ = super::serve::serve_files(&mut tunnel_stream, settings.files_index, &settings.consts)
             .await;
@@ -296,6 +322,35 @@ async fn spawn_tunnel(
     local_stream.set_nodelay(true)?;
     _ = tokio::io::copy_bidirectional(&mut local_stream, &mut tunnel_stream).await;
     _ = local_stream.shutdown().await;
+    _ = tunnel_stream.shutdown().await;
+    Ok(())
+}
+
+async fn spawn_ssh_tunnel(
+    opener: Arc<ConnectionOpener>,
+    hello_packet: [u8; HelloPacket::buf_size()],
+    settings: TunnelSettings,
+    request_time: Instant,
+) -> Result<()> {
+    let mut tunnel_stream =
+        establish_connection(opener, hello_packet, &settings, request_time).await?;
+
+    for _ in 0..100 {
+        let msg = "Not implemented yet!\r\n";
+        tunnel_stream
+            .write_all(
+                &SshPacketHeader {
+                    packet_type: super::ssh::SshPacketType::Data,
+                    length: msg.len() as u32,
+                }
+                .to_buf(),
+            )
+            .await?;
+        tunnel_stream.write_all(msg.as_bytes()).await?;
+        tunnel_stream.flush().await?;
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+
     _ = tunnel_stream.shutdown().await;
     Ok(())
 }

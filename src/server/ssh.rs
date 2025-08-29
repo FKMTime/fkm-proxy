@@ -3,15 +3,22 @@ use kanal::AsyncSender;
 use russh::keys::PrivateKey;
 use russh::server::{Auth, Msg, Server as _, Session};
 use russh::{Channel, ChannelId, MethodKind, MethodSet, Preferred, Pty};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-pub async fn spawn_ssh_server(key: PrivateKey) -> Result<()> {
+use crate::structs::SharedProxyState;
+
+pub async fn spawn_ssh_server(
+    bind: SocketAddr,
+    key: PrivateKey,
+    state: SharedProxyState,
+) -> Result<()> {
     tokio::task::spawn(async move {
         loop {
-            let res = ssh_server(key.clone()).await;
+            let res = ssh_server(&bind, key.clone(), state.clone()).await;
             if let Err(e) = res {
                 println!("[SSH] SSH Server error {e:?}");
             }
@@ -23,7 +30,7 @@ pub async fn spawn_ssh_server(key: PrivateKey) -> Result<()> {
     Ok(())
 }
 
-async fn ssh_server(key: PrivateKey) -> Result<()> {
+async fn ssh_server(bind: &SocketAddr, key: PrivateKey, state: SharedProxyState) -> Result<()> {
     let mut methods = MethodSet::empty();
     methods.push(MethodKind::Password);
 
@@ -40,22 +47,25 @@ async fn ssh_server(key: PrivateKey) -> Result<()> {
         ..Default::default()
     };
     let config = Arc::new(config);
-    let mut sh = Server { tx: None };
+    let mut sh = Server { state, tx: None };
 
-    let socket = TcpListener::bind(("0.0.0.0", 2222)).await.unwrap();
+    let socket = TcpListener::bind(bind).await.unwrap();
     let server = sh.run_on_socket(config, &socket);
-    let handle = server.handle();
 
+    /*
+       let handle = server.handle();
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_secs(600)).await;
         handle.shutdown("Server shutting down after 10 minutes".into());
     });
+    */
 
     server.await?;
     Ok(())
 }
 
 struct Server {
+    state: SharedProxyState,
     tx: Option<AsyncSender<ChannelData>>,
 }
 
@@ -64,12 +74,13 @@ enum ChannelData {
     Data(Vec<u8>),
 }
 
-impl Server {}
-
 impl russh::server::Server for Server {
     type Handler = Self;
     fn new_client(&mut self, _: Option<std::net::SocketAddr>) -> Self {
-        Server { tx: None }
+        Server {
+            state: self.state.clone(),
+            tx: None,
+        }
     }
 
     fn handle_session_error(&mut self, _error: <Self::Handler as russh::server::Handler>::Error) {

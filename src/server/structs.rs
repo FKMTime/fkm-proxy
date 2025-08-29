@@ -12,7 +12,11 @@ pub type TunnelGetResult = Result<Tunnel, TunnelError>;
 /// Enum used to request tunnel from connector
 pub enum TunnelRequest {
     Close(String),
-    Request { ssl: bool, tunnel_id: u128 },
+    Request {
+        ssl: bool,
+        ssh: bool,
+        tunnel_id: u128,
+    },
 }
 
 /// `own_ssl` - if tunnel serves its own ssl cert

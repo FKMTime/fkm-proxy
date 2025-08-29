@@ -156,8 +156,7 @@ async fn connector_handler(mut stream: ConnectorStream, state: SharedProxyState)
             .write_all(
                 &ConnectorPacket {
                     packet_type: ConnectorPacketType::Close,
-                    tunnel_id: 0,
-                    ssl: false,
+                    ..Default::default()
                 }
                 .to_buf(),
             )
@@ -182,8 +181,7 @@ async fn connector_handler(mut stream: ConnectorStream, state: SharedProxyState)
             .write_all(
                 &ConnectorPacket {
                     packet_type: ConnectorPacketType::ConnectorConnected,
-                    tunnel_id: 0,
-                    ssl: false,
+                    ..Default::default()
                 }
                 .to_buf(),
             )
@@ -237,8 +235,7 @@ async fn connector_loop(
                     TunnelRequest::Close(reason) => {
                         _ = stream.write_all(&ConnectorPacket {
                             packet_type: ConnectorPacketType::Close,
-                            tunnel_id: 0,
-                            ssl: false,
+                            ..Default::default()
                         }.to_buf()).await;
                         _ = send_string_to_stream(stream, &reason).await;
                         _ = stream.flush().await;
@@ -247,11 +244,12 @@ async fn connector_loop(
                         tokio::time::sleep(Duration::from_millis(100)).await;
                         return Ok(false)
                     },
-                    TunnelRequest::Request { ssl, tunnel_id } => {
+                    TunnelRequest::Request { ssl, ssh, tunnel_id } => {
                         stream.write_all(&ConnectorPacket {
                             packet_type: ConnectorPacketType::TunnelRequest,
                             tunnel_id,
                             ssl,
+                            ssh
                         }.to_buf()).await?;
                     }
                 }
@@ -264,8 +262,7 @@ async fn connector_loop(
             _ = pinger.tick() => {
                 stream.write_all(&ConnectorPacket {
                     packet_type: ConnectorPacketType::Ping,
-                    tunnel_id: 0,
-                    ssl: false,
+                    ..Default::default()
                 }.to_buf()).await?;
 
                 let read = stream.read_u8().await?;
@@ -400,6 +397,7 @@ where
 
         tunn.send(TunnelRequest::Request {
             ssl,
+            ssh: false,
             tunnel_id: generated_tunnel_id,
         })
         .await?;

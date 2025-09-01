@@ -22,11 +22,12 @@ impl SshPacketHeader {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum SshPacketType {
     Invalid = 0,
     PtyResize = 1,
     Data = 2,
+    User = 3,
 }
 
 impl SshPacketType {
@@ -35,6 +36,7 @@ impl SshPacketType {
             SshPacketType::Invalid => 0,
             SshPacketType::PtyResize => 1,
             SshPacketType::Data => 2,
+            SshPacketType::User => 3,
         }
     }
 
@@ -42,6 +44,7 @@ impl SshPacketType {
         match v {
             1 => SshPacketType::PtyResize,
             2 => SshPacketType::Data,
+            3 => SshPacketType::User,
             _ => SshPacketType::Invalid,
         }
     }

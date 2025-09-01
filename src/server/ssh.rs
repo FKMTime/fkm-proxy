@@ -147,6 +147,15 @@ impl russh::server::Handler for Server {
 
             Ok(true)
         } else {
+            _ = ret
+                .1
+                .disconnect(
+                    Disconnect::ConnectionLost,
+                    "Cannot access tunnel!".to_string(),
+                    "en".to_string(),
+                )
+                .await;
+
             Ok(false)
         }
     }
@@ -190,16 +199,24 @@ impl russh::server::Handler for Server {
 
             if tunnel_res.is_err() {
                 _ = self.state.get_tunnel_oneshot(generated_tunnel_id).await;
-
-                return Ok(Auth::Reject {
-                    proceed_with_methods: Some(methods),
-                    partial_success: false,
-                });
+                return Ok(Auth::Accept); // this is not really accepted,
+                // will disconnect when channel is opened
             }
 
-            // TODO: send user to stream
-            _ = user;
-            self.stream = Some(tunnel_res.unwrap().unwrap());
+            let mut stream = tunnel_res.unwrap().unwrap();
+            stream
+                .write_all(
+                    &SshPacketHeader {
+                        packet_type: fkm_proxy::utils::ssh::SshPacketType::User,
+                        length: user.len() as u32,
+                    }
+                    .to_buf(),
+                )
+                .await
+                .unwrap();
+            stream.write_all(user.as_bytes()).await.unwrap();
+
+            self.stream = Some(stream);
             return Ok(Auth::Accept);
         }
 

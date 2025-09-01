@@ -17,7 +17,7 @@ use crate::utils::{
     certs::{NoCertVerification, SkipQuicServerVerification},
     http::write_http_resp,
     read_string_from_stream,
-    ssh::SshPacketHeader,
+    ssh::{SshPacketHeader, SshPacketType},
 };
 
 pub struct Options {
@@ -335,12 +335,25 @@ async fn spawn_ssh_tunnel(
     let mut tunnel_stream =
         establish_connection(opener, hello_packet, &settings, request_time).await?;
 
-    let (mut pty, pts) = pty_process::open().unwrap();
-    let cmd = pty_process::Command::new("bash");
-    let mut child = cmd.spawn(pts).unwrap();
-
     let mut header_buf = [0; SshPacketHeader::HEADER_LENGTH];
     let mut buf = [0u8; 4096];
+    tunnel_stream.read_exact(&mut header_buf).await?;
+    let header = SshPacketHeader::from_buf(&header_buf);
+
+    let tunnel_user = if header.packet_type == SshPacketType::User {
+        tunnel_stream
+            .read_exact(&mut buf[..header.length as usize])
+            .await?;
+
+        core::str::from_utf8(&buf[..header.length as usize])?
+    } else {
+        return Err(anyhow!("Wrong first ssh tunnel packet!"));
+    };
+
+    let (mut pty, pts) = pty_process::open().unwrap();
+    let cmd = pty_process::Command::new("bash").env("PROXY_USER", tunnel_user);
+    let mut child = cmd.spawn(pts).unwrap();
+
     loop {
         tokio::select! {
             recv = tunnel_stream.read_exact(&mut header_buf) => {

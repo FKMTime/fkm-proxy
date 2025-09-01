@@ -335,20 +335,84 @@ async fn spawn_ssh_tunnel(
     let mut tunnel_stream =
         establish_connection(opener, hello_packet, &settings, request_time).await?;
 
-    for _ in 0..100 {
-        let msg = "Not implemented yet!\r\n";
-        tunnel_stream
-            .write_all(
-                &SshPacketHeader {
-                    packet_type: super::ssh::SshPacketType::Data,
-                    length: msg.len() as u32,
+    let (mut pty, pts) = pty_process::open().unwrap();
+    let cmd = pty_process::Command::new("bash");
+    let mut child = cmd.spawn(pts).unwrap();
+
+    let mut header_buf = [0; SshPacketHeader::HEADER_LENGTH];
+    let mut buf = [0u8; 4096];
+    loop {
+        tokio::select! {
+            recv = tunnel_stream.read_exact(&mut header_buf) => {
+                if let Ok(n) = recv {
+                    if n == 0 {
+                        break;
+                    }
+                    /*
+
+                            let rows = stream.read_u16().await?;
+                            let cols = stream.read_u16().await?;
+                            pty.resize(pty_process::Size::new(rows, cols)).unwrap();
+                        },
+                        1 => {
+                            let n = stream.read_u16().await? as usize;
+                            let mut buf = vec![0; n];
+                            stream.read_exact(&mut buf[..n]).await?;
+                            pty.write_all(&buf[..n]).await.unwrap();
+                    */
+
+                    let header = SshPacketHeader::from_buf(&header_buf);
+                    match header.packet_type {
+                        crate::utils::ssh::SshPacketType::PtyResize => {
+                            let rows = tunnel_stream.read_u16().await?;
+                            let cols = tunnel_stream.read_u16().await?;
+                            pty.resize(pty_process::Size::new(rows, cols)).unwrap();
+                        },
+                        crate::utils::ssh::SshPacketType::Data => {
+                            let mut rem = header.length as usize;
+
+                            while rem > 0 {
+                                let read_n = rem.min(4096);
+                                tunnel_stream.read_exact(&mut buf[..read_n]).await.unwrap();
+                                pty.write_all(&buf[..read_n]).await.unwrap();
+
+                                rem -= read_n;
+                            }
+
+                        },
+                        _ => {}
+                    }
                 }
-                .to_buf(),
-            )
-            .await?;
-        tunnel_stream.write_all(msg.as_bytes()).await?;
-        tunnel_stream.flush().await?;
-        tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+            res = pty.read(&mut buf) => {
+                if let Ok(n) = res {
+                    if n == 0 {
+                        break;
+                    }
+
+                    tunnel_stream
+                        .write_all(
+                            &SshPacketHeader {
+                                packet_type: super::ssh::SshPacketType::Data,
+                                length: n as u32,
+                            }
+                            .to_buf(),
+                        )
+                        .await?;
+                    tunnel_stream.write_all(&buf[..n]).await?;
+                } else {
+                    break;
+                }
+            }
+            p_res = child.wait() => {
+                if p_res.is_err() {
+                    break;
+                }
+
+                let _p_res = p_res.unwrap();
+                break;
+            }
+        }
     }
 
     _ = tunnel_stream.shutdown().await;

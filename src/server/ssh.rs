@@ -1,17 +1,15 @@
+use crate::structs::{SharedProxyState, TunnelRequest};
 use anyhow::Result;
 use fkm_proxy::utils::ConnectorStream;
 use fkm_proxy::utils::ssh::SshPacketHeader;
-use kanal::AsyncSender;
 use russh::keys::PrivateKey;
 use russh::server::{Auth, Msg, Server as _, Session};
-use russh::{Channel, ChannelId, MethodKind, MethodSet, Preferred, Pty};
+use russh::{Channel, ChannelId, Disconnect, MethodKind, MethodSet, Preferred, Pty};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
-
-use crate::structs::{SharedProxyState, TunnelError, TunnelRequest};
+use tokio::net::TcpListener;
 
 pub async fn spawn_ssh_server(
     bind: SocketAddr,
@@ -52,6 +50,7 @@ async fn ssh_server(bind: &SocketAddr, key: PrivateKey, state: SharedProxyState)
     let mut sh = Server {
         state,
         stream: None,
+        pipe: None,
     };
 
     let socket = TcpListener::bind(bind).await.unwrap();
@@ -72,11 +71,7 @@ async fn ssh_server(bind: &SocketAddr, key: PrivateKey, state: SharedProxyState)
 struct Server {
     state: SharedProxyState,
     stream: Option<ConnectorStream>,
-}
-
-enum ChannelData {
-    PtyResize { rows: u16, cols: u16 },
-    Data(Vec<u8>),
+    pipe: Option<tokio_pipe::PipeWrite>,
 }
 
 impl russh::server::Server for Server {
@@ -85,6 +80,7 @@ impl russh::server::Server for Server {
         Server {
             state: self.state.clone(),
             stream: None,
+            pipe: None,
         }
     }
 
@@ -103,64 +99,50 @@ impl russh::server::Handler for Server {
     ) -> Result<bool, Self::Error> {
         let ret = (channel.id(), session.handle());
         if let Some(mut stream) = self.stream.take() {
+            let (mut rx, tx) = tokio_pipe::pipe().unwrap();
+            self.pipe = Some(tx);
+
             tokio::task::spawn(async move {
                 let mut header_buf = [0; SshPacketHeader::HEADER_LENGTH];
                 let mut buf = [0; 4096];
-
-                loop {
-                    stream.read_exact(&mut header_buf).await.unwrap();
-                    let header = SshPacketHeader::from_buf(&header_buf);
-
-                    match header.packet_type {
-                        fkm_proxy::utils::ssh::SshPacketType::Data => {
-                            // TODO: calc reamning etc to buf size
-                            stream
-                                .read_exact(&mut buf[..header.length as usize])
-                                .await
-                                .unwrap();
-
-                            ret.1
-                                .data(ret.0, buf[..header.length as usize].into())
-                                .await
-                                .unwrap();
-                        }
-                        _ => {}
-                    }
-                }
-                /*
-                let mut stream = TcpStream::connect("127.0.0.1:5321").await.unwrap();
+                let mut pipe_buf = [0; 512];
 
                 loop {
                     tokio::select! {
-                        recv = rx.recv() => {
-                            if let Ok(recv) = recv {
-                                match recv {
-                                    ChannelData::PtyResize { rows, cols } => {
-                                        stream.write_u8(2).await.unwrap();
-                                        stream.write_u16(rows as u16).await.unwrap();
-                                        stream.write_u16(cols as u16).await.unwrap();
-                                    },
-                                    ChannelData::Data(data) => {
-                                        stream.write_u8(1).await.unwrap();
-                                        stream.write_u16(data.len() as u16).await.unwrap();
-                                        stream.write_all(&data).await.unwrap();
-                                    }
+                        res = stream.read_exact(&mut header_buf) => {
+                            if res.is_err() {
+                                _ = ret.1
+                                    .disconnect(
+                                        Disconnect::ConnectionLost,
+                                        "Connection Lost".to_string(),
+                                        "en".to_string(),
+                                    )
+                                    .await;
+
+                                break;
+                            }
+
+                            let header = SshPacketHeader::from_buf(&header_buf);
+
+                            if let fkm_proxy::utils::ssh::SshPacketType::Data = header.packet_type {
+                                let mut rem = header.length as usize;
+
+                                while rem > 0 {
+                                    let read_n = rem.min(4096);
+                                    stream.read_exact(&mut buf[..read_n]).await.unwrap();
+                                    ret.1.data(ret.0, buf[..read_n].into()).await.unwrap();
+
+                                    rem -= read_n;
                                 }
                             }
                         }
-                        recv = stream.read_u8() => {
-                            if let Ok(recv) = recv {
-                                if recv == 1 {
-                                    let n = stream.read_u16().await.unwrap() as usize;
-                                    let mut buf = vec![0; n];
-                                    stream.read_exact(&mut buf[..n]).await.unwrap();
-                                    ret.1.data(ret.0, buf[..n].into()).await.unwrap();
-                                }
+                        res = rx.read(&mut pipe_buf) => {
+                            if let Ok(n) = res {
+                                stream.write_all(&pipe_buf[..n]).await.unwrap();
                             }
                         }
                     }
                 }
-                */
             });
 
             Ok(true)
@@ -172,52 +154,53 @@ impl russh::server::Handler for Server {
     async fn auth_password(&mut self, user: &str, password: &str) -> Result<Auth, Self::Error> {
         let mut methods = MethodSet::empty();
         methods.push(MethodKind::Password);
-        println!("{user} {password}");
 
-        if let Ok(token) = password.parse() {
-            if let Some(tunn) = self.state.get_tunnel_entry(token).await {
-                let mut generated_tunnel_id = [0u8; 16];
-                self.state
-                    .consts
-                    .rng
-                    .secure_random
-                    .fill(&mut generated_tunnel_id)
-                    .unwrap();
+        if let Ok(token) = password.parse()
+            && let Some(tunn) = self.state.get_tunnel_entry(token).await
+        {
+            let mut generated_tunnel_id = [0u8; 16];
+            self.state
+                .consts
+                .rng
+                .secure_random
+                .fill(&mut generated_tunnel_id)
+                .unwrap();
 
-                let generated_tunnel_id = u128::from_be_bytes(generated_tunnel_id);
+            let generated_tunnel_id = u128::from_be_bytes(generated_tunnel_id);
 
-                let (tx, rx) = tokio::sync::oneshot::channel();
-                self.state
-                    .insert_tunnel_oneshot(generated_tunnel_id, tx)
-                    .await;
-
-                tunn.sender
-                    .send(TunnelRequest::Request {
-                        ssl: false,
-                        ssh: true,
-                        tunnel_id: generated_tunnel_id,
-                    })
-                    .await
-                    .unwrap();
-
-                let tunnel_res = tokio::time::timeout(
-                    Duration::from_millis(self.state.get_tunnel_timeout().await),
-                    rx,
-                )
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            self.state
+                .insert_tunnel_oneshot(generated_tunnel_id, tx)
                 .await;
 
-                if tunnel_res.is_err() {
-                    _ = self.state.get_tunnel_oneshot(generated_tunnel_id).await;
+            tunn.sender
+                .send(TunnelRequest::Request {
+                    ssl: false,
+                    ssh: true,
+                    tunnel_id: generated_tunnel_id,
+                })
+                .await
+                .unwrap();
 
-                    return Ok(Auth::Reject {
-                        proceed_with_methods: Some(methods),
-                        partial_success: false,
-                    });
-                }
+            let tunnel_res = tokio::time::timeout(
+                Duration::from_millis(self.state.get_tunnel_timeout().await),
+                rx,
+            )
+            .await;
 
-                self.stream = Some(tunnel_res.unwrap().unwrap());
-                return Ok(Auth::Accept);
+            if tunnel_res.is_err() {
+                _ = self.state.get_tunnel_oneshot(generated_tunnel_id).await;
+
+                return Ok(Auth::Reject {
+                    proceed_with_methods: Some(methods),
+                    partial_success: false,
+                });
             }
+
+            // TODO: send user to stream
+            _ = user;
+            self.stream = Some(tunnel_res.unwrap().unwrap());
+            return Ok(Auth::Accept);
         }
 
         Ok(Auth::Reject {
@@ -228,9 +211,9 @@ impl russh::server::Handler for Server {
 
     async fn data(
         &mut self,
-        channel: ChannelId,
+        _channel: ChannelId,
         data: &[u8],
-        session: &mut Session,
+        _session: &mut Session,
     ) -> Result<(), Self::Error> {
         // Sending Ctrl+C ends the session and disconnects the client
         /*
@@ -239,66 +222,74 @@ impl russh::server::Handler for Server {
         }
         */
 
-        /*
-        let data = CryptoVec::from(format!("Got data: {:x?}\r\n", data));
-        session.data(channel, data)?;
-        */
-
-        /*
-        if let Some(tx) = &mut self.tx {
-            tx.send(ChannelData::Data(data.to_vec())).await.unwrap();
+        if let Some(pipe) = self.pipe.as_mut() {
+            pipe.write_all(
+                &SshPacketHeader {
+                    packet_type: fkm_proxy::utils::ssh::SshPacketType::Data,
+                    length: data.len() as u32,
+                }
+                .to_buf(),
+            )
+            .await
+            .unwrap();
+            pipe.write_all(data).await.unwrap();
         }
-        */
         Ok(())
     }
 
     async fn pty_request(
         &mut self,
-        channel: ChannelId,
-        term: &str,
+        _channel: ChannelId,
+        _term: &str,
         col_width: u32,
         row_height: u32,
-        pix_width: u32,
-        pix_height: u32,
-        modes: &[(Pty, u32)],
-        session: &mut Session,
+        _pix_width: u32,
+        _pix_height: u32,
+        _modes: &[(Pty, u32)],
+        _session: &mut Session,
     ) -> Result<(), Self::Error> {
-        /*
-        if let Some(tx) = &mut self.tx {
-            tx.send(ChannelData::PtyResize {
-                rows: row_height as u16,
-                cols: col_width as u16,
-            })
+        if let Some(pipe) = self.pipe.as_mut() {
+            pipe.write_all(
+                &SshPacketHeader {
+                    packet_type: fkm_proxy::utils::ssh::SshPacketType::PtyResize,
+                    length: 4,
+                }
+                .to_buf(),
+            )
             .await
             .unwrap();
-        }
-        */
 
-        println!("pty req {term} {col_width} {row_height} {pix_width}px {pix_height}px");
+            pipe.write_u16(row_height as u16).await.unwrap();
+            pipe.write_u16(col_width as u16).await.unwrap();
+        }
+
         Ok(())
     }
 
     async fn window_change_request(
         &mut self,
-        channel: ChannelId,
+        _channel: ChannelId,
         col_width: u32,
         row_height: u32,
-        pix_width: u32,
-        pix_height: u32,
-        session: &mut Session,
+        _pix_width: u32,
+        _pix_height: u32,
+        _session: &mut Session,
     ) -> Result<(), Self::Error> {
-        /*
-        if let Some(tx) = &mut self.tx {
-            tx.send(ChannelData::PtyResize {
-                rows: row_height as u16,
-                cols: col_width as u16,
-            })
+        if let Some(pipe) = self.pipe.as_mut() {
+            pipe.write_all(
+                &SshPacketHeader {
+                    packet_type: fkm_proxy::utils::ssh::SshPacketType::PtyResize,
+                    length: 4,
+                }
+                .to_buf(),
+            )
             .await
             .unwrap();
-        }
-        */
 
-        println!("chg {col_width} {row_height} {pix_width}px {pix_height}px");
+            pipe.write_u16(row_height as u16).await.unwrap();
+            pipe.write_u16(col_width as u16).await.unwrap();
+        }
+
         Ok(())
     }
 }

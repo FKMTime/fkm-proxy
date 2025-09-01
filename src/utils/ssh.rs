@@ -1,3 +1,4 @@
+#[derive(Debug)]
 pub struct SshPacketHeader {
     pub packet_type: SshPacketType,
     pub length: u32,
@@ -21,6 +22,7 @@ impl SshPacketHeader {
     }
 }
 
+#[derive(Debug)]
 pub enum SshPacketType {
     Invalid = 0,
     PtyResize = 1,

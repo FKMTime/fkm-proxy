@@ -135,6 +135,7 @@ async fn connector(options: &Options) -> Result<()> {
         token: options.token,
         own_ssl: options.local_ssl.is_some(),
         redirect_ssl: options.redirect_ssl,
+        ssh_enabled: options.ssh_cmd.is_some(),
         tunnel_id: 0,
     };
 

@@ -197,6 +197,7 @@ async fn connector_handler(mut stream: ConnectorStream, state: SharedProxyState)
                 tx,
                 hello_packet.own_ssl,
                 hello_packet.redirect_ssl,
+                hello_packet.ssh_enabled,
             )
             .await;
 

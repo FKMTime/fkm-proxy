@@ -21,11 +21,13 @@ pub enum TunnelRequest {
 
 /// `own_ssl` - if tunnel serves its own ssl cert
 /// `redirect_ssl` - if server should redirect http to https automatically
+/// `ssh_enabled` - if client have ssh tunneling enabled
 /// `sender` - tunnel communication channel
 #[derive(Clone)]
 pub struct Tunnel {
     pub own_ssl: bool,
     pub redirect_ssl: bool,
+    pub ssh_enabled: bool,
     pub sender: TunnelSender,
 }
 
@@ -131,6 +133,7 @@ impl SharedProxyState {
         tunnel: TunnelSender,
         own_ssl: bool,
         redirect_ssl: bool,
+        ssh_enabled: bool,
     ) {
         let mut state = self.inner.write().await;
         let old = state.tunnels.insert(
@@ -138,6 +141,7 @@ impl SharedProxyState {
             Tunnel {
                 own_ssl,
                 redirect_ssl,
+                ssh_enabled,
                 sender: tunnel,
             },
         );

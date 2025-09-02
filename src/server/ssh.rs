@@ -167,6 +167,10 @@ impl russh::server::Handler for Server {
         if let Ok(token) = password.parse()
             && let Some(tunn) = self.state.get_tunnel_entry(token).await
         {
+            if !tunn.ssh_enabled {
+                return Ok(Auth::Accept); // this is not really accepted,
+            }
+
             let mut generated_tunnel_id = [0u8; 16];
             self.state
                 .consts

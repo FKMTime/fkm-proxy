@@ -34,6 +34,9 @@ struct Args {
     #[arg(long, action, short = 'i')]
     files_index: bool,
 
+    #[arg(long, action, short = 's')]
+    ssh_cmd: Option<String>,
+
     #[arg(long, action, env = "USE_QUIC")]
     use_quic: bool,
 }
@@ -59,7 +62,7 @@ async fn main() -> Result<()> {
         files_index: args.files_index,
         serve_files: args.serve_files,
         quic: args.use_quic,
-        ssh_cmd: None,
+        ssh_cmd: args.ssh_cmd,
         consts: Consts {
             max_req_time: MAX_REQUEST_TIME,
             error_html: ERROR_HTML,

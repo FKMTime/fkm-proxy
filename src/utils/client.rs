@@ -332,6 +332,10 @@ async fn spawn_ssh_tunnel(
     settings: TunnelSettings,
     request_time: Instant,
 ) -> Result<()> {
+    let Some(ref ssh_cmd) = settings.ssh_cmd else {
+        return Err(anyhow!("Ssh tunnel not enabled by client!"));
+    };
+
     let mut tunnel_stream =
         establish_connection(opener, hello_packet, &settings, request_time).await?;
 
@@ -351,7 +355,7 @@ async fn spawn_ssh_tunnel(
     };
 
     let (mut pty, pts) = pty_process::open().unwrap();
-    let cmd = pty_process::Command::new("bash").env("PROXY_USER", tunnel_user);
+    let cmd = pty_process::Command::new(ssh_cmd).env("PROXY_USER", tunnel_user);
     let mut child = cmd.spawn(pts).unwrap();
 
     loop {
@@ -361,18 +365,6 @@ async fn spawn_ssh_tunnel(
                     if n == 0 {
                         break;
                     }
-                    /*
-
-                            let rows = stream.read_u16().await?;
-                            let cols = stream.read_u16().await?;
-                            pty.resize(pty_process::Size::new(rows, cols)).unwrap();
-                        },
-                        1 => {
-                            let n = stream.read_u16().await? as usize;
-                            let mut buf = vec![0; n];
-                            stream.read_exact(&mut buf[..n]).await?;
-                            pty.write_all(&buf[..n]).await.unwrap();
-                    */
 
                     let header = SshPacketHeader::from_buf(&header_buf);
                     match header.packet_type {

@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+use tracing::{error, info};
 
 pub async fn spawn_ssh_server(
     bind: SocketAddr,
@@ -20,7 +21,7 @@ pub async fn spawn_ssh_server(
         loop {
             let res = ssh_server(&bind, key.clone(), state.clone()).await;
             if let Err(e) = res {
-                println!("[SSH] SSH Server error {e:?}");
+                error!("[SSH] SSH Server error {e:?}");
             }
 
             tokio::time::sleep(Duration::from_millis(500)).await;
@@ -56,14 +57,7 @@ async fn ssh_server(bind: &SocketAddr, key: PrivateKey, state: SharedProxyState)
     let socket = TcpListener::bind(bind).await.unwrap();
     let server = sh.run_on_socket(config, &socket);
 
-    /*
-       let handle = server.handle();
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_secs(600)).await;
-        handle.shutdown("Server shutting down after 10 minutes".into());
-    });
-    */
-
+    info!("[SSH] SSH listener started on: {:?}", socket.local_addr());
     server.await?;
     Ok(())
 }
@@ -85,7 +79,7 @@ impl russh::server::Server for Server {
     }
 
     fn handle_session_error(&mut self, _error: <Self::Handler as russh::server::Handler>::Error) {
-        eprintln!("Session error: {:#?}", _error);
+        error!("Session error: {:#?}", _error);
     }
 }
 
@@ -236,13 +230,6 @@ impl russh::server::Handler for Server {
         data: &[u8],
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
-        // Sending Ctrl+C ends the session and disconnects the client
-        /*
-        if data == [3] {
-            return Err(russh::Error::Disconnect);
-        }
-        */
-
         if let Some(pipe) = self.pipe.as_mut() {
             pipe.write_all(
                 &SshPacketHeader {

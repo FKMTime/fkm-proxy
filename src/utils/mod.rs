@@ -74,11 +74,11 @@ impl HelloPacket {
     pub fn from_buf(buf: &[u8; Self::buf_size()]) -> Self {
         Self {
             hp_type: HelloPacketType::from_u8(buf[0]),
-            token: u128::from_be_bytes(buf[1..17].try_into().unwrap()),
+            token: u128::from_be_bytes(buf[1..17].try_into().expect("Cannot fail")),
             own_ssl: buf[17] != 0,
             redirect_ssl: buf[18] != 0,
             ssh_enabled: buf[19] != 0,
-            tunnel_id: u128::from_be_bytes(buf[20..36].try_into().unwrap()),
+            tunnel_id: u128::from_be_bytes(buf[20..36].try_into().expect("Cannot fail")),
         }
     }
 }
@@ -152,7 +152,7 @@ impl ConnectorPacket {
     pub fn from_buf(buf: &[u8; Self::buf_size()]) -> Self {
         Self {
             packet_type: ConnectorPacketType::from_u8(buf[0]),
-            tunnel_id: u128::from_be_bytes(buf[1..17].try_into().unwrap()),
+            tunnel_id: u128::from_be_bytes(buf[1..17].try_into().expect("Cannot fail")),
             ssl: buf[17] != 0,
             ssh: buf[18] != 0,
         }

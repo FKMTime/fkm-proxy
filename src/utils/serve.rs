@@ -1,13 +1,10 @@
-use anyhow::Result;
-use std::path::{Path, PathBuf};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
 use crate::utils::{
     client::Consts,
     http::{construct_raw_http_resp, write_http_resp},
 };
-
-// TODO: cleanup this fucking mess LMAO
+use anyhow::Result;
+use std::path::{Path, PathBuf};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 pub async fn serve_files<S>(stream: &mut S, files_index: bool, consts: &Consts) -> Result<()>
 where

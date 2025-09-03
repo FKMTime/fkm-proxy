@@ -17,7 +17,7 @@ impl SshPacketHeader {
     pub fn from_buf(buf: &[u8; Self::HEADER_LENGTH]) -> Self {
         Self {
             packet_type: SshPacketType::from_u8(buf[0]),
-            length: u32::from_be_bytes(buf[1..5].try_into().unwrap()),
+            length: u32::from_be_bytes(buf[1..5].try_into().expect("Cannot fail")),
         }
     }
 }

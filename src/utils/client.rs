@@ -355,9 +355,9 @@ async fn spawn_ssh_tunnel(
         return Err(anyhow!("Wrong first ssh tunnel packet!"));
     };
 
-    let (mut pty, pts) = pty_process::open().unwrap();
+    let (mut pty, pts) = pty_process::open()?;
     let cmd = pty_process::Command::new(ssh_cmd).env("PROXY_USER", tunnel_user);
-    let mut child = cmd.spawn(pts).unwrap();
+    let mut child = cmd.spawn(pts)?;
 
     loop {
         tokio::select! {
@@ -372,15 +372,15 @@ async fn spawn_ssh_tunnel(
                         crate::utils::ssh::SshPacketType::PtyResize => {
                             let rows = tunnel_stream.read_u16().await?;
                             let cols = tunnel_stream.read_u16().await?;
-                            pty.resize(pty_process::Size::new(rows, cols)).unwrap();
+                            pty.resize(pty_process::Size::new(rows, cols))?;
                         },
                         crate::utils::ssh::SshPacketType::Data => {
                             let mut rem = header.length as usize;
 
                             while rem > 0 {
                                 let read_n = rem.min(4096);
-                                tunnel_stream.read_exact(&mut buf[..read_n]).await.unwrap();
-                                pty.write_all(&buf[..read_n]).await.unwrap();
+                                tunnel_stream.read_exact(&mut buf[..read_n]).await?;
+                                pty.write_all(&buf[..read_n]).await?;
 
                                 rem -= read_n;
                             }
@@ -415,7 +415,7 @@ async fn spawn_ssh_tunnel(
                     break;
                 }
 
-                let _p_res = p_res.unwrap();
+                let _p_res = p_res?;
                 break;
             }
         }

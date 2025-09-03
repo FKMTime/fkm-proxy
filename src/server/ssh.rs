@@ -54,7 +54,7 @@ async fn ssh_server(bind: &SocketAddr, key: PrivateKey, state: SharedProxyState)
         pipe: None,
     };
 
-    let socket = TcpListener::bind(bind).await.unwrap();
+    let socket = TcpListener::bind(bind).await?;
     let server = sh.run_on_socket(config, &socket);
 
     info!("[SSH] SSH listener started on: {:?}", socket.local_addr());
@@ -93,7 +93,7 @@ impl russh::server::Handler for Server {
     ) -> Result<bool, Self::Error> {
         let ret = (channel.id(), session.handle());
         if let Some(mut stream) = self.stream.take() {
-            let (mut rx, tx) = tokio_pipe::pipe().unwrap();
+            let (mut rx, tx) = tokio_pipe::pipe()?;
             self.pipe = Some(tx);
 
             tokio::task::spawn(async move {
@@ -123,8 +123,30 @@ impl russh::server::Handler for Server {
 
                                 while rem > 0 {
                                     let read_n = rem.min(4096);
-                                    stream.read_exact(&mut buf[..read_n]).await.unwrap();
-                                    ret.1.data(ret.0, buf[..read_n].into()).await.unwrap();
+                                    let res = stream.read_exact(&mut buf[..read_n]).await;
+                                    if res.is_err() {
+                                        _ = ret.1
+                                            .disconnect(
+                                                Disconnect::ConnectionLost,
+                                                "Connection Lost".to_string(),
+                                                "en".to_string(),
+                                            )
+                                            .await;
+                                        break;
+                                    }
+
+                                    let res =ret.1.data(ret.0, buf[..read_n].into()).await;
+                                    if res.is_err() {
+                                        _ = ret.1
+                                            .disconnect(
+                                                Disconnect::ConnectionLost,
+                                                "Connection Lost".to_string(),
+                                                "en".to_string(),
+                                            )
+                                            .await;
+
+                                        break;
+                                    }
 
                                     rem -= read_n;
                                 }
@@ -132,7 +154,18 @@ impl russh::server::Handler for Server {
                         }
                         res = rx.read(&mut pipe_buf) => {
                             if let Ok(n) = res {
-                                stream.write_all(&pipe_buf[..n]).await.unwrap();
+                                let res = stream.write_all(&pipe_buf[..n]).await;
+                                if res.is_err() {
+                                    _ = ret.1
+                                        .disconnect(
+                                            Disconnect::ConnectionLost,
+                                            "Connection Lost".to_string(),
+                                            "en".to_string(),
+                                        )
+                                        .await;
+
+                                    break;
+                                }
                             }
                         }
                     }
@@ -166,12 +199,12 @@ impl russh::server::Handler for Server {
             }
 
             let mut generated_tunnel_id = [0u8; 16];
-            self.state
+            _ = self
+                .state
                 .consts
                 .rng
                 .secure_random
-                .fill(&mut generated_tunnel_id)
-                .unwrap();
+                .fill(&mut generated_tunnel_id);
 
             let generated_tunnel_id = u128::from_be_bytes(generated_tunnel_id);
 
@@ -180,14 +213,14 @@ impl russh::server::Handler for Server {
                 .insert_tunnel_oneshot(generated_tunnel_id, tx)
                 .await;
 
-            tunn.sender
+            _ = tunn
+                .sender
                 .send(TunnelRequest::Request {
                     ssl: false,
                     ssh: true,
                     tunnel_id: generated_tunnel_id,
                 })
-                .await
-                .unwrap();
+                .await;
 
             let tunnel_res = tokio::time::timeout(
                 Duration::from_millis(self.state.get_tunnel_timeout().await),
@@ -195,13 +228,12 @@ impl russh::server::Handler for Server {
             )
             .await;
 
-            if tunnel_res.is_err() {
+            let Ok(Ok(mut stream)) = tunnel_res else {
                 _ = self.state.get_tunnel_oneshot(generated_tunnel_id).await;
                 return Ok(Auth::Accept); // this is not really accepted,
                 // will disconnect when channel is opened
-            }
+            };
 
-            let mut stream = tunnel_res.unwrap().unwrap();
             stream
                 .write_all(
                     &SshPacketHeader {
@@ -210,9 +242,8 @@ impl russh::server::Handler for Server {
                     }
                     .to_buf(),
                 )
-                .await
-                .unwrap();
-            stream.write_all(user.as_bytes()).await.unwrap();
+                .await?;
+            stream.write_all(user.as_bytes()).await?;
 
             self.stream = Some(stream);
             return Ok(Auth::Accept);
@@ -238,9 +269,9 @@ impl russh::server::Handler for Server {
                 }
                 .to_buf(),
             )
-            .await
-            .unwrap();
-            pipe.write_all(data).await.unwrap();
+            .await?;
+
+            pipe.write_all(data).await?;
         }
         Ok(())
     }
@@ -264,11 +295,10 @@ impl russh::server::Handler for Server {
                 }
                 .to_buf(),
             )
-            .await
-            .unwrap();
+            .await?;
 
-            pipe.write_u16(row_height as u16).await.unwrap();
-            pipe.write_u16(col_width as u16).await.unwrap();
+            pipe.write_u16(row_height as u16).await?;
+            pipe.write_u16(col_width as u16).await?;
         }
 
         Ok(())
@@ -291,11 +321,10 @@ impl russh::server::Handler for Server {
                 }
                 .to_buf(),
             )
-            .await
-            .unwrap();
+            .await?;
 
-            pipe.write_u16(row_height as u16).await.unwrap();
-            pipe.write_u16(col_width as u16).await.unwrap();
+            pipe.write_u16(row_height as u16).await?;
+            pipe.write_u16(col_width as u16).await?;
         }
 
         Ok(())

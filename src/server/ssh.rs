@@ -79,7 +79,7 @@ impl russh::server::Server for Server {
     }
 
     fn handle_session_error(&mut self, _error: <Self::Handler as russh::server::Handler>::Error) {
-        error!("Session error: {:#?}", _error);
+        //error!("Session error: {:#?}", _error);
     }
 }
 

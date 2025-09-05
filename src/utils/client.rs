@@ -375,15 +375,8 @@ async fn spawn_ssh_tunnel(
                             pty.resize(pty_process::Size::new(rows, cols))?;
                         },
                         crate::utils::ssh::SshPacketType::Data => {
-                            let mut rem = header.length as usize;
-
-                            while rem > 0 {
-                                let read_n = rem.min(4096);
-                                tunnel_stream.read_exact(&mut buf[..read_n]).await?;
-                                pty.write_all(&buf[..read_n]).await?;
-
-                                rem -= read_n;
-                            }
+                            tunnel_stream.read_exact(&mut buf[..header.length as usize]).await?;
+                            pty.write_all(&buf[..header.length as usize]).await?;
 
                         },
                         _ => {}

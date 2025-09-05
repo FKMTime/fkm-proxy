@@ -57,7 +57,7 @@ async fn ssh_server(bind: &SocketAddr, key: PrivateKey, state: SharedProxyState)
     let socket = TcpListener::bind(bind).await?;
     let server = sh.run_on_socket(config, &socket);
 
-    info!("[SSH] SSH listener started on: {:?}", socket.local_addr());
+    info!("[SSH] SSH listener started on: {:?}", socket.local_addr()?);
     server.await?;
     Ok(())
 }
@@ -105,50 +105,19 @@ impl russh::server::Handler for Server {
                     tokio::select! {
                         res = stream.read_exact(&mut header_buf) => {
                             if res.is_err() {
-                                _ = ret.1
-                                    .disconnect(
-                                        Disconnect::ConnectionLost,
-                                        "Connection Lost".to_string(),
-                                        "en".to_string(),
-                                    )
-                                    .await;
-
                                 break;
                             }
 
                             let header = SshPacketHeader::from_buf(&header_buf);
-
                             if let fkm_proxy::utils::ssh::SshPacketType::Data = header.packet_type {
-                                let mut rem = header.length as usize;
+                                let res = stream.read_exact(&mut buf[..header.length as usize]).await;
+                                if res.is_err() {
+                                    break;
+                                }
 
-                                while rem > 0 {
-                                    let read_n = rem.min(4096);
-                                    let res = stream.read_exact(&mut buf[..read_n]).await;
-                                    if res.is_err() {
-                                        _ = ret.1
-                                            .disconnect(
-                                                Disconnect::ConnectionLost,
-                                                "Connection Lost".to_string(),
-                                                "en".to_string(),
-                                            )
-                                            .await;
-                                        break;
-                                    }
-
-                                    let res =ret.1.data(ret.0, buf[..read_n].into()).await;
-                                    if res.is_err() {
-                                        _ = ret.1
-                                            .disconnect(
-                                                Disconnect::ConnectionLost,
-                                                "Connection Lost".to_string(),
-                                                "en".to_string(),
-                                            )
-                                            .await;
-
-                                        break;
-                                    }
-
-                                    rem -= read_n;
+                                let res = ret.1.data(ret.0, buf[..header.length as usize].into()).await;
+                                if res.is_err() {
+                                    break;
                                 }
                             }
                         }
@@ -156,20 +125,21 @@ impl russh::server::Handler for Server {
                             if let Ok(n) = res {
                                 let res = stream.write_all(&pipe_buf[..n]).await;
                                 if res.is_err() {
-                                    _ = ret.1
-                                        .disconnect(
-                                            Disconnect::ConnectionLost,
-                                            "Connection Lost".to_string(),
-                                            "en".to_string(),
-                                        )
-                                        .await;
-
-                                    break;
+                                   break;
                                 }
                             }
                         }
                     }
                 }
+
+                _ = ret
+                    .1
+                    .disconnect(
+                        Disconnect::ConnectionLost,
+                        "Connection Lost".to_string(),
+                        "en".to_string(),
+                    )
+                    .await;
             });
 
             Ok(true)

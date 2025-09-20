@@ -26,6 +26,7 @@ pub struct HelloPacket {
     pub redirect_ssl: bool,
     pub ssh_enabled: bool,
     pub tunnel_id: u128,
+    pub version: u32,
 }
 
 #[derive(Debug, PartialEq)]
@@ -67,6 +68,7 @@ impl HelloPacket {
         tmp[18] = self.redirect_ssl as u8;
         tmp[19] = self.ssh_enabled as u8;
         tmp[20..36].copy_from_slice(&self.tunnel_id.to_be_bytes());
+        tmp[36..40].copy_from_slice(&self.version.to_be_bytes());
 
         tmp
     }
@@ -79,6 +81,7 @@ impl HelloPacket {
             redirect_ssl: buf[18] != 0,
             ssh_enabled: buf[19] != 0,
             tunnel_id: u128::from_be_bytes(buf[20..36].try_into().expect("Cannot fail")),
+            version: u32::from_be_bytes(buf[36..40].try_into().expect("Cannot fail")),
         }
     }
 }

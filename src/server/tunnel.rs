@@ -1,8 +1,11 @@
 use crate::structs::{SharedProxyState, TunnelError, TunnelGetResult, TunnelRequest, TunnelSender};
 use anyhow::{Result, anyhow};
-use fkm_proxy::utils::{
-    ConnectorPacket, ConnectorPacketType, ConnectorStream, HelloPacket, HelloPacketType,
-    http::construct_http_redirect, send_string_to_stream,
+use fkm_proxy::{
+    get_version, get_version_str,
+    utils::{
+        ConnectorPacket, ConnectorPacketType, ConnectorStream, HelloPacket, HelloPacketType,
+        http::construct_http_redirect, send_string_to_stream,
+    },
 };
 use kanal::AsyncReceiver;
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
@@ -141,7 +144,6 @@ async fn connector_handler_tcp(
     connector_handler(stream, state).await
 }
 
-#[inline(always)]
 async fn connector_handler(mut stream: ConnectorStream, state: SharedProxyState) -> Result<()> {
     let mut connection_buff = [0u8; HelloPacket::buf_size()];
     stream.read_exact(&mut connection_buff).await?;
@@ -172,6 +174,38 @@ async fn connector_handler(mut stream: ConnectorStream, state: SharedProxyState)
 
     // im the connector!
     if hello_packet.hp_type == HelloPacketType::Connector {
+        if hello_packet.version != get_version() {
+            tracing::warn!(
+                "Connector({}) for domain {domain} cannot connect because of version mismatch!",
+                stream.get_name()
+            );
+
+            _ = stream
+                .write_all(
+                    &ConnectorPacket {
+                        packet_type: ConnectorPacketType::Close,
+                        ..Default::default()
+                    }
+                    .to_buf(),
+                )
+                .await;
+            _ = send_string_to_stream(
+                &mut stream,
+                &format!(
+                    "Version mismatch! Client version: \"{}\", server version: \"{}\".",
+                    get_version_str(&hello_packet.version),
+                    get_version_str(&get_version()),
+                ),
+            )
+            .await;
+            _ = stream.flush().await;
+
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            stream.shutdown().await;
+
+            return Ok(());
+        }
+
         tracing::info!(
             "Connector({}) connected to url with domain: {domain}",
             stream.get_name()

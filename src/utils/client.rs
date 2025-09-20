@@ -12,12 +12,15 @@ use tokio::{
 };
 use tokio_rustls::TlsConnector;
 
-use crate::utils::{
-    ConnectorPacket, ConnectorPacketType, ConnectorStream, HelloPacket, HelloPacketType,
-    certs::{NoCertVerification, SkipQuicServerVerification},
-    http::write_http_resp,
-    read_string_from_stream,
-    ssh::{SshPacketHeader, SshPacketType},
+use crate::{
+    get_version,
+    utils::{
+        ConnectorPacket, ConnectorPacketType, ConnectorStream, HelloPacket, HelloPacketType,
+        certs::{NoCertVerification, SkipQuicServerVerification},
+        http::write_http_resp,
+        read_string_from_stream,
+        ssh::{SshPacketHeader, SshPacketType},
+    },
 };
 
 pub struct Options {
@@ -137,6 +140,7 @@ async fn connector(options: &Options) -> Result<()> {
         redirect_ssl: options.redirect_ssl,
         ssh_enabled: options.ssh_cmd.is_some(),
         tunnel_id: 0,
+        version: get_version(),
     };
 
     stream.write_all(&hello_packet.to_buf()).await?;

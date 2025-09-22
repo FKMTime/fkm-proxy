@@ -124,6 +124,7 @@ pub struct ConnectorPacket {
     pub tunnel_id: u128,
     pub ssl: bool,
     pub ssh: bool,
+    pub exit: bool,
 }
 
 impl Default for ConnectorPacket {
@@ -133,6 +134,7 @@ impl Default for ConnectorPacket {
             tunnel_id: Default::default(),
             ssl: Default::default(),
             ssh: Default::default(),
+            exit: false,
         }
     }
 }
@@ -148,6 +150,7 @@ impl ConnectorPacket {
         tmp[1..17].copy_from_slice(&self.tunnel_id.to_be_bytes());
         tmp[17] = self.ssl as u8;
         tmp[18] = self.ssh as u8;
+        tmp[19] = self.exit as u8;
 
         tmp
     }
@@ -158,6 +161,7 @@ impl ConnectorPacket {
             tunnel_id: u128::from_be_bytes(buf[1..17].try_into().expect("Cannot fail")),
             ssl: buf[17] != 0,
             ssh: buf[18] != 0,
+            exit: buf[19] != 0,
         }
     }
 }

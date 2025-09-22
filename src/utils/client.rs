@@ -155,6 +155,11 @@ async fn connector(options: &Options) -> Result<()> {
         ConnectorPacketType::Close => {
             let reason = read_string_from_stream(&mut stream).await?;
             tracing::error!("Closing connector! Close reason: {reason}");
+            if packet.exit {
+                tracing::warn!("Exiting app!");
+                std::process::exit(0);
+            }
+
             return Ok(());
         }
         _ => {

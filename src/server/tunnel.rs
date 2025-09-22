@@ -158,6 +158,7 @@ async fn connector_handler(mut stream: ConnectorStream, state: SharedProxyState)
             .write_all(
                 &ConnectorPacket {
                     packet_type: ConnectorPacketType::Close,
+                    exit: true,
                     ..Default::default()
                 }
                 .to_buf(),
@@ -184,6 +185,7 @@ async fn connector_handler(mut stream: ConnectorStream, state: SharedProxyState)
                 .write_all(
                     &ConnectorPacket {
                         packet_type: ConnectorPacketType::Close,
+                        exit: true,
                         ..Default::default()
                     }
                     .to_buf(),
@@ -284,7 +286,8 @@ async fn connector_loop(
                             packet_type: ConnectorPacketType::TunnelRequest,
                             tunnel_id,
                             ssl,
-                            ssh
+                            ssh,
+                            exit: false
                         }.to_buf()).await?;
                     }
                 }

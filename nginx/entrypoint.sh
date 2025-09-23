@@ -1,7 +1,7 @@
 if [ -z "$TOKEN" ]; then
-    echo "Token is required"
-    exit 0
+    echo "TOKEN is required for proxy client"
+else
+    /bin/proxy-client &
 fi
 
-/bin/proxy-client &
 nginx -g "daemon off;"

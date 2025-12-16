@@ -1,6 +1,6 @@
 use crate::structs::SharedProxyState;
 use anyhow::Result;
-use clap::{Parser, command};
+use clap::Parser;
 use fkm_proxy::utils::{
     certs::{cert_from_str, key_from_str},
     parse_socketaddr,

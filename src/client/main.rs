@@ -1,5 +1,5 @@
 use anyhow::Result;
-use clap::{Parser, command};
+use clap::Parser;
 use fkm_proxy::utils::{
     client::{Consts, Options, spawn_connector},
     parse_socketaddr,

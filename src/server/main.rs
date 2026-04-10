@@ -81,6 +81,12 @@ async fn main() -> Result<()> {
         rcgen::generate_simple_self_signed(vec!["proxy.lan".to_string()])?;
     let crt = cert_from_str(&cert.pem())?;
     let key = key_from_str(&signing_key.serialize_pem())?;
+
+    tracing::info!(
+        "Connector cert fingerprint (SHA-256): {}",
+        fkm_proxy::utils::certs::compute_fingerprint(&crt[0])
+    );
+
     let config = tokio_rustls::rustls::ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(crt, key)?;
@@ -105,10 +111,8 @@ async fn main() -> Result<()> {
     if let Some(ssh_bind) = args.bind_ssh {
         let ssh_path = args.config_path.join("ssh.key");
         let ssh_key = if !ssh_path.exists() {
-            let key = russh::keys::PrivateKey::random(
-                &mut russh::keys::ssh_key::rand_core::OsRng,
-                russh::keys::Algorithm::Ed25519,
-            )?;
+            let key =
+                russh::keys::PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519)?;
 
             let key_data = key.to_openssh(russh::keys::ssh_key::LineEnding::LF)?;
             tokio::fs::write(&ssh_path, key_data).await?;

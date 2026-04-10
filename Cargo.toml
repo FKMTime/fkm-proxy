@@ -18,13 +18,13 @@ path = "src/server/main.rs"
 anyhow = "1.0.102"
 kanal = "0.1.1"
 thiserror = "2.0.18"
-tokio = { version = "1.50.0", features = ["io-util", "net", "fs", "sync", "signal", "time", "macros", "rt-multi-thread"] }
+tokio = { version = "1.51.1", features = ["io-util", "net", "fs", "sync", "signal", "time", "macros", "rt-multi-thread"] }
 tokio-rustls = { version = "0.26.4", features = ["ring", "logging", "tls12"], default-features = false }
-clap = { version = "4.5.60", features = ["derive", "env"] }
+clap = { version = "4.6.0", features = ["derive", "env"] }
 dotenvy = "0.15.7"
 rcgen = "0.14.7"
 tracing = "0.1.44"
-tracing-subscriber = "0.3.22"
+tracing-subscriber = "0.3.23"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 mime_guess = "2.0.5"
@@ -35,9 +35,12 @@ http = "1.4.0"
 chrono = "0.4.44"
 html-escape = "0.2.13"
 quinn = { version = "0.11.9", features = ["rustls"] }
-russh = { version = "0.57.1", default-features = false, features = ["flate2", "ring"] }
+russh = { version = "0.60.0", default-features = false, features = ["flate2", "ring"] }
 pty-process = { version = "0.5.3", features = ["async"] }
 tokio-pipe = "0.2.12"
+rand = "0.10.0"
+bytes = "1.11.1"
+ring = "0.17.14"
 
 [profile.release]
 opt-level = "z"     # Optimize for size.

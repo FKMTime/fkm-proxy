@@ -39,6 +39,9 @@ struct Args {
 
     #[arg(long, action, env = "USE_QUIC")]
     use_quic: bool,
+
+    #[arg(long, env = "SERVER_FINGERPRINT")]
+    server_fingerprint: Option<String>,
 }
 
 #[tokio::main]
@@ -63,6 +66,7 @@ async fn main() -> Result<()> {
         serve_files: args.serve_files,
         quic: args.use_quic,
         ssh_cmd: args.ssh_cmd,
+        server_fingerprint: args.server_fingerprint,
         consts: Consts {
             max_req_time: MAX_REQUEST_TIME,
             error_html: ERROR_HTML,

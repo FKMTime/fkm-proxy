@@ -35,6 +35,95 @@ pub fn key_from_str(key: &str) -> Result<PrivateKeyDer<'static>> {
         .ok_or_else(|| anyhow::anyhow!("Private ket returned None"))
 }
 
+pub fn compute_fingerprint(cert: &CertificateDer<'_>) -> String {
+    let hash = ring::digest::digest(&ring::digest::SHA256, cert.as_ref());
+    hash.as_ref().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[derive(Debug)]
+pub struct FingerprintVerifier {
+    expected: String,
+    provider: Arc<rustls::crypto::CryptoProvider>,
+}
+
+impl FingerprintVerifier {
+    pub fn new(fingerprint: &str) -> Result<Arc<Self>> {
+        let normalized = fingerprint.to_lowercase().replace([':', ' '], "");
+
+        if normalized.len() != 64 || !normalized.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(anyhow::anyhow!(
+                "Invalid server fingerprint: must be a 64-character hex SHA-256 digest \
+                 (colons/spaces are accepted). Got {normalized:?}"
+            ));
+        }
+
+        Ok(Arc::new(Self {
+            expected: normalized,
+            provider: Arc::new(rustls::crypto::ring::default_provider()),
+        }))
+    }
+
+    fn check(&self, cert: &CertificateDer<'_>) -> Result<(), rustls::Error> {
+        let got = compute_fingerprint(cert);
+        if got == self.expected {
+            Ok(())
+        } else {
+            Err(rustls::Error::General(format!(
+                "TLS certificate fingerprint mismatch: expected {}, got {got}",
+                self.expected,
+            )))
+        }
+    }
+}
+
+impl rustls::client::danger::ServerCertVerifier for FingerprintVerifier {
+    fn verify_server_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        self.check(end_entity)?;
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.provider
+            .signature_verification_algorithms
+            .supported_schemes()
+    }
+}
+
 #[derive(Debug)]
 pub struct NoCertVerification;
 impl ServerCertVerifier for NoCertVerification {

@@ -119,7 +119,7 @@ impl russh::server::Handler for Server {
                                     break;
                                 }
 
-                                let res = ret.1.data(ret.0, buf[..header.length as usize].into()).await;
+                                let res = ret.1.data(ret.0, bytes::Bytes::copy_from_slice(&buf[..header.length as usize])).await;
                                 if res.is_err() {
                                     break;
                                 }

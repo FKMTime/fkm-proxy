@@ -372,9 +372,12 @@ async fn handle_http_client(
         let path = parts
             .get(1)
             .ok_or_else(|| anyhow::anyhow!("Malformed path sent"))?;
+        let sanitized_path: String = path.chars().filter(|&c| c != '\r' && c != '\n').collect();
 
-        let redirect =
-            construct_http_redirect(&format!("https://{host}:{}{path}", state.consts.ssl_port));
+        let redirect = construct_http_redirect(&format!(
+            "https://{host}:{}{sanitized_path}",
+            state.consts.ssl_port
+        ));
         stream.write_all(redirect.as_bytes()).await?;
         stream.flush().await?;
         stream.shutdown().await?;

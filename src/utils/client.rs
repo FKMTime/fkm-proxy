@@ -16,7 +16,7 @@ use crate::{
     get_version,
     utils::{
         ConnectorPacket, ConnectorPacketType, ConnectorStream, HelloPacket, HelloPacketType,
-        certs::{NoCertVerification, SkipQuicServerVerification},
+        certs::{FingerprintVerifier, NoCertVerification, SkipQuicServerVerification},
         http::write_http_resp,
         read_string_from_stream,
         ssh::{SshPacketHeader, SshPacketType},
@@ -33,6 +33,8 @@ pub struct Options {
     pub files_index: bool,
     pub quic: bool,
     pub ssh_cmd: Option<String>,
+
+    pub server_fingerprint: Option<String>,
 
     pub consts: Consts,
 }
@@ -77,17 +79,36 @@ pub async fn spawn_connector(options: Options) {
 }
 
 async fn connector(options: &Options) -> Result<()> {
+    let tls_verifier: Arc<dyn tokio_rustls::rustls::client::danger::ServerCertVerifier> =
+        match options.server_fingerprint.as_deref() {
+            Some(fp) => FingerprintVerifier::new(fp)?,
+            None => {
+                tracing::warn!(
+                    "No --server-fingerprint provided; TLS certificate verification is DISABLED. \
+                     Set SERVER_FINGERPRINT to the SHA-256 fingerprint printed by the server at \
+                     startup to enable certificate pinning."
+                );
+                Arc::new(NoCertVerification)
+            }
+        };
+
+    let quic_verifier: Arc<dyn rustls::client::danger::ServerCertVerifier> =
+        match options.server_fingerprint.as_deref() {
+            Some(fp) => FingerprintVerifier::new(fp)?,
+            None => SkipQuicServerVerification::new(),
+        };
+
     let mut endpoint = Endpoint::client(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0))?;
     endpoint.set_default_client_config(ClientConfig::new(Arc::new(QuicClientConfig::try_from(
         rustls::ClientConfig::builder()
             .dangerous()
-            .with_custom_certificate_verifier(SkipQuicServerVerification::new())
+            .with_custom_certificate_verifier(quic_verifier)
             .with_no_client_auth(),
     )?)));
 
     let config = tokio_rustls::rustls::ClientConfig::builder()
         .dangerous()
-        .with_custom_certificate_verifier(Arc::new(NoCertVerification))
+        .with_custom_certificate_verifier(tls_verifier)
         .with_no_client_auth();
     let connector = TlsConnector::from(Arc::new(config));
 

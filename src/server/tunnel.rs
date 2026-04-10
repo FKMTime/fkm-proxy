@@ -369,7 +369,10 @@ async fn handle_http_client(
         }
 
         let parts = parts.trim().split(" ").collect::<Vec<&str>>();
-        let path = parts[1];
+        let path = parts
+            .get(1)
+            .ok_or_else(|| anyhow::anyhow!("Malformed path sent"))?;
+
         let redirect =
             construct_http_redirect(&format!("https://{host}:{}{path}", state.consts.ssl_port));
         stream.write_all(redirect.as_bytes()).await?;
@@ -529,7 +532,7 @@ where
         .ok_or_else(|| anyhow!("No http header!"))?;
     let http_header = http_header.split_whitespace().collect::<Vec<&str>>();
 
-    if http_header[1].starts_with("/create") && http_header[0] == "POST" {
+    if http_header.len() >= 2 && http_header[1].starts_with("/create") && http_header[0] == "POST" {
         let query = http_header[1]
             .split("?")
             .nth(1)
@@ -538,7 +541,7 @@ where
         let search: HashMap<&str, &str> = query
             .split("&")
             .map(|x| x.split("=").collect::<Vec<&str>>())
-            .map(|x| (x[0], x[1]))
+            .map_while(|x| Some((*x.first()?, *x.get(1)?)))
             .collect();
 
         let url = search.get("url").ok_or_else(|| anyhow!("No url!"))?;
@@ -564,7 +567,7 @@ where
                 stream.write_all(response.as_bytes()).await?;
             }
         }
-    } else if http_header[1] == "/" && http_header[0] == "GET" {
+    } else if http_header.len() >= 2 && http_header[1] == "/" && http_header[0] == "GET" {
         _ = fkm_proxy::utils::http::write_http_resp(stream, 200, PANEL_HTML, "text/html").await;
     } else {
         _ = fkm_proxy::utils::http::write_http_resp(

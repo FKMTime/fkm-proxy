@@ -109,6 +109,10 @@ impl russh::server::Handler for Server {
                             }
 
                             let header = SshPacketHeader::from_buf(&header_buf);
+                            if header.length > 4096 {
+                                break;
+                            }
+
                             if let fkm_proxy::utils::ssh::SshPacketType::Data = header.packet_type {
                                 let res = stream.read_exact(&mut buf[..header.length as usize]).await;
                                 if res.is_err() {
@@ -165,7 +169,10 @@ impl russh::server::Handler for Server {
             && let Some(tunn) = self.state.get_tunnel_entry(token).await
         {
             if !tunn.ssh_enabled {
-                return Ok(Auth::Accept); // this is not really accepted,
+                return Ok(Auth::Reject {
+                    proceed_with_methods: None,
+                    partial_success: false,
+                });
             }
 
             let mut generated_tunnel_id = [0u8; 16];
@@ -200,8 +207,10 @@ impl russh::server::Handler for Server {
 
             let Ok(Ok(mut stream)) = tunnel_res else {
                 _ = self.state.get_tunnel_oneshot(generated_tunnel_id).await;
-                return Ok(Auth::Accept); // this is not really accepted,
-                // will disconnect when channel is opened
+                return Ok(Auth::Reject {
+                    proceed_with_methods: None,
+                    partial_success: false,
+                });
             };
 
             stream

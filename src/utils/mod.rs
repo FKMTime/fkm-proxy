@@ -205,18 +205,20 @@ where
     Ok(())
 }
 
-pub async fn read_string_from_stream<T>(stream: &mut T) -> Result<String>
+pub async fn read_string_from_stream<T>(stream: &mut T, max_size: usize) -> Result<String>
 where
     T: AsyncRead + Unpin,
 {
     let mut buffer = Vec::new();
+    let mut size = 0;
     loop {
         let byte = stream.read_u8().await?;
-        if byte == 0 {
+        if byte == 0 || size >= max_size {
             break;
         }
 
         buffer.push(byte);
+        size += 1;
     }
 
     Ok(String::from_utf8(buffer)?)

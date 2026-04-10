@@ -22,11 +22,19 @@ where
     }
 
     let parts = parts.trim().split(" ").collect::<Vec<&str>>();
+    let path = parts[1].trim_start_matches('/').trim_end_matches('/');
+    let base = std::env::current_dir().unwrap_or(PathBuf::from("/tmp"));
 
-    let path = parts[1].trim_start_matches("/").trim_end_matches("/");
-    let local_path = std::env::current_dir()
-        .unwrap_or(PathBuf::from("/tmp"))
-        .join(path);
+    let local_path = base.join(path);
+    let canonical = match local_path.canonicalize() {
+        Ok(p) => p,
+        Err(_) => return Err(anyhow::anyhow!("File not found")),
+    };
+    let canonical_base = base.canonicalize().unwrap_or(base.clone());
+
+    if !canonical.starts_with(&canonical_base) {
+        return Err(anyhow::anyhow!("Access denied"));
+    }
 
     if local_path.exists() {
         if let Ok(metadata) = local_path.metadata() {

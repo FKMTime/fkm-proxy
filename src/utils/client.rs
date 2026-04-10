@@ -153,7 +153,7 @@ async fn connector(options: &Options) -> Result<()> {
     match packet.packet_type {
         ConnectorPacketType::ConnectorConnected => {}
         ConnectorPacketType::Close => {
-            let reason = read_string_from_stream(&mut stream).await?;
+            let reason = read_string_from_stream(&mut stream, 256).await?;
             tracing::error!("Closing connector! Close reason: {reason}");
             if packet.exit {
                 tracing::warn!("Exiting app!");
@@ -170,7 +170,7 @@ async fn connector(options: &Options) -> Result<()> {
 
     let nonssl_port = stream.read_u16().await?;
     let ssl_port = stream.read_u16().await?;
-    let domain = read_string_from_stream(&mut stream).await?;
+    let domain = read_string_from_stream(&mut stream, 256).await?;
     tracing::info!(
         "Access through:\n - http://{domain}:{nonssl_port}\n - https://{domain}:{ssl_port}"
     );
@@ -198,7 +198,7 @@ async fn connector(options: &Options) -> Result<()> {
 
                     continue; // ping/pong
                 } else if packet.packet_type == ConnectorPacketType::Close {
-                    let reason = read_string_from_stream(&mut stream).await?;
+                    let reason = read_string_from_stream(&mut stream, 256).await?;
                     tracing::error!("Closing connector! Close reason: {reason}");
                     return Ok(());
                 }
@@ -377,6 +377,10 @@ async fn spawn_ssh_tunnel(
                     }
 
                     let header = SshPacketHeader::from_buf(&header_buf);
+                    if header.length > 4096 {
+                        break;
+                    }
+
                     match header.packet_type {
                         crate::utils::ssh::SshPacketType::PtyResize => {
                             let rows = tunnel_stream.read_u16().await?;

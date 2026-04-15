@@ -21,7 +21,7 @@ pub mod ssh;
 #[derive(Debug)]
 pub struct HelloPacket {
     pub hp_type: HelloPacketType,
-    pub token: u128,
+    pub token_hmac: [u8; 32],
     pub own_ssl: bool,
     pub redirect_ssl: bool,
     pub ssh_enabled: bool,
@@ -35,6 +35,14 @@ pub enum HelloPacketType {
     Tunnel = 1,
 
     Invalid,
+}
+
+pub fn compute_token_hmac(token: u128, nonce: &[u8]) -> [u8; 32] {
+    let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &token.to_be_bytes());
+    let tag = ring::hmac::sign(&key, nonce);
+    tag.as_ref()
+        .try_into()
+        .expect("HMAC-SHA256 output is always 32 bytes; this is a bug if it fails")
 }
 
 impl HelloPacketType {
@@ -57,18 +65,18 @@ impl HelloPacketType {
 
 impl HelloPacket {
     pub const fn buf_size() -> usize {
-        40
+        56
     }
 
     pub fn to_buf(&self) -> [u8; Self::buf_size()] {
         let mut tmp = [0; Self::buf_size()];
         tmp[0] = self.hp_type.to_u8();
-        tmp[1..17].copy_from_slice(&self.token.to_be_bytes());
-        tmp[17] = self.own_ssl as u8;
-        tmp[18] = self.redirect_ssl as u8;
-        tmp[19] = self.ssh_enabled as u8;
-        tmp[20..36].copy_from_slice(&self.tunnel_id.to_be_bytes());
-        tmp[36..40].copy_from_slice(&self.version.to_be_bytes());
+        tmp[1..33].copy_from_slice(&self.token_hmac);
+        tmp[33] = self.own_ssl as u8;
+        tmp[34] = self.redirect_ssl as u8;
+        tmp[35] = self.ssh_enabled as u8;
+        tmp[36..52].copy_from_slice(&self.tunnel_id.to_be_bytes());
+        tmp[52..56].copy_from_slice(&self.version.to_be_bytes());
 
         tmp
     }
@@ -76,12 +84,12 @@ impl HelloPacket {
     pub fn from_buf(buf: &[u8; Self::buf_size()]) -> Self {
         Self {
             hp_type: HelloPacketType::from_u8(buf[0]),
-            token: u128::from_be_bytes(buf[1..17].try_into().expect("Cannot fail")),
-            own_ssl: buf[17] != 0,
-            redirect_ssl: buf[18] != 0,
-            ssh_enabled: buf[19] != 0,
-            tunnel_id: u128::from_be_bytes(buf[20..36].try_into().expect("Cannot fail")),
-            version: u32::from_be_bytes(buf[36..40].try_into().expect("Cannot fail")),
+            token_hmac: buf[1..33].try_into().expect("Cannot fail"),
+            own_ssl: buf[33] != 0,
+            redirect_ssl: buf[34] != 0,
+            ssh_enabled: buf[35] != 0,
+            tunnel_id: u128::from_be_bytes(buf[36..52].try_into().expect("Cannot fail")),
+            version: u32::from_be_bytes(buf[52..56].try_into().expect("Cannot fail")),
         }
     }
 }

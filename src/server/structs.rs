@@ -193,15 +193,19 @@ impl SharedProxyState {
         self.consts.acceptor.clone()
     }
 
-    pub async fn get_domain_by_token(&self, token: u128) -> Option<String> {
+    pub async fn find_token_by_hmac(
+        &self,
+        hmac: &[u8; 32],
+        nonce: &[u8; 32],
+    ) -> Option<(String, u128)> {
         let state = self.inner.read().await;
-        state
-            .domains
-            .iter()
-            .enumerate()
-            .find(|(_, (_, v))| **v == token)
-            .map(|(_, (k, _))| k)
-            .cloned()
+        for (domain, &token) in &state.domains {
+            let expected = fkm_proxy::utils::compute_token_hmac(token, nonce);
+            if expected == *hmac {
+                return Some((domain.clone(), token));
+            }
+        }
+        None
     }
 
     #[inline(always)]

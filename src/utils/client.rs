@@ -17,6 +17,7 @@ use crate::{
     utils::{
         ConnectorPacket, ConnectorPacketType, ConnectorStream, HelloPacket, HelloPacketType,
         certs::{FingerprintVerifier, NoCertVerification, SkipQuicServerVerification},
+        compute_token_hmac,
         http::write_http_resp,
         read_string_from_stream,
         ssh::{SshPacketHeader, SshPacketType},
@@ -54,6 +55,7 @@ struct TunnelSettings {
     nonssl_addr: SocketAddr,
     use_quic: bool,
     ssh_cmd: Option<String>,
+    token: u128,
 
     serve_files: bool,
     files_index: bool,
@@ -128,16 +130,23 @@ async fn connector(options: &Options) -> Result<()> {
     }
 
     let opener = Arc::new(opener);
-    let mut stream = if options.quic {
-        let quic_bi = opener
+    let (mut stream, nonce) = if options.quic {
+        let connection = opener
             .quic_connection
             .as_ref()
-            .ok_or(anyhow!("Quic Connection ref get"))?
+            .ok_or(anyhow!("Quic Connection ref get"))?;
+        let quic_bi = connection
             .open_bi()
             .await
             .map_err(|e| anyhow!("failed to open stream: {}", e))?;
 
-        ConnectorStream::Quic(quic_bi)
+        let stream_id_bytes = u64::from(quic_bi.0.id()).to_le_bytes();
+        let mut nonce = [0u8; 32];
+        connection
+            .export_keying_material(&mut nonce, b"fkm-proxy-auth", &stream_id_bytes)
+            .map_err(|_| anyhow!("Failed to export QUIC session keying material"))?;
+
+        (ConnectorStream::Quic(quic_bi), nonce)
     } else {
         let stream = TcpStream::connect(&options.proxy).await?;
         stream.set_nodelay(true)?;
@@ -149,14 +158,20 @@ async fn connector(options: &Options) -> Result<()> {
             )
             .await?;
 
-        ConnectorStream::TcpTlsClient(Box::new(stream))
+        let nonce: [u8; 32] =
+            stream
+                .get_ref()
+                .1
+                .export_keying_material([0u8; 32], b"fkm-proxy-auth", None)?;
+
+        (ConnectorStream::TcpTlsClient(Box::new(stream)), nonce)
     };
 
     let mut buf = [0; ConnectorPacket::buf_size()];
 
-    let mut hello_packet = HelloPacket {
+    let hello_packet = HelloPacket {
         hp_type: HelloPacketType::Connector,
-        token: options.token,
+        token_hmac: compute_token_hmac(options.token, &nonce),
         own_ssl: options.local_ssl.is_some(),
         redirect_ssl: options.redirect_ssl,
         ssh_enabled: options.ssh_cmd.is_some(),
@@ -196,8 +211,6 @@ async fn connector(options: &Options) -> Result<()> {
         "Access through:\n - http://{domain}:{nonssl_port}\n - https://{domain}:{ssl_port}"
     );
 
-    hello_packet.hp_type = HelloPacketType::Tunnel;
-
     let mut last_ping = tokio::time::interval_at(
         Instant::now() + Duration::from_secs(30),
         Duration::from_secs(30),
@@ -232,31 +245,30 @@ async fn connector(options: &Options) -> Result<()> {
                     nonssl_addr: options.local,
                     use_quic: options.quic,
                     ssh_cmd: options.ssh_cmd.clone(),
+                    token: options.token,
 
                     serve_files: options.serve_files,
                     files_index: options.files_index,
                     consts: consts.clone()
                 };
 
-                hello_packet.tunnel_id = packet.tunnel_id;
-                let hello_packet = hello_packet.to_buf();
-
+                let tunnel_id = packet.tunnel_id;
                 tokio::task::spawn(async move {
                     let res = if packet.ssh {
                         spawn_ssh_tunnel(
                             opener,
-                            hello_packet,
                             settings,
                             requested_time,
+                            tunnel_id
                         )
                             .await
                     } else {
                         spawn_tunnel(
                             opener,
-                            hello_packet,
                             settings,
                             packet.ssl,
                             requested_time,
+                            tunnel_id
                         )
                             .await
                     };
@@ -276,7 +288,8 @@ async fn connector(options: &Options) -> Result<()> {
 
 async fn establish_connection(
     opener: Arc<ConnectionOpener>,
-    hello_packet: [u8; HelloPacket::buf_size()],
+    token: u128,
+    tunnel_id: u128,
     settings: &TunnelSettings,
     request_time: Instant,
 ) -> Result<ConnectorStream> {
@@ -284,15 +297,24 @@ async fn establish_connection(
         return Err(anyhow!("Requested time exceeded max request time."));
     }
 
-    let mut tunnel_stream = if settings.use_quic {
-        let quic_bi = opener
+    let (mut tunnel_stream, nonce) = if settings.use_quic {
+        let connection = opener
             .quic_connection
             .as_ref()
-            .ok_or(anyhow::anyhow!("Quic Connection ref get"))?
+            .ok_or(anyhow::anyhow!("Quic Connection ref get"))?;
+
+        let quic_bi = connection
             .open_bi()
             .await
             .map_err(|e| anyhow!("failed to open stream: {}", e))?;
-        ConnectorStream::Quic(quic_bi)
+
+        let stream_id_bytes = u64::from(quic_bi.0.id()).to_le_bytes();
+        let mut nonce = [0u8; 32];
+        connection
+            .export_keying_material(&mut nonce, b"fkm-proxy-auth", &stream_id_bytes)
+            .map_err(|_| anyhow!("Failed to export QUIC session keying material"))?;
+
+        (ConnectorStream::Quic(quic_bi), nonce)
     } else {
         let stream = TcpStream::connect(settings.proxy_addr).await?;
         stream.set_nodelay(true)?;
@@ -304,22 +326,37 @@ async fn establish_connection(
             )
             .await?;
 
-        ConnectorStream::TcpTlsClient(Box::new(stream))
+        let nonce: [u8; 32] =
+            stream
+                .get_ref()
+                .1
+                .export_keying_material([0u8; 32], b"fkm-proxy-auth", None)?;
+
+        (ConnectorStream::TcpTlsClient(Box::new(stream)), nonce)
     };
 
-    tunnel_stream.write_all(&hello_packet).await?;
+    let hello_packet = HelloPacket {
+        hp_type: HelloPacketType::Tunnel,
+        token_hmac: compute_token_hmac(token, &nonce),
+        own_ssl: false,
+        redirect_ssl: false,
+        ssh_enabled: false,
+        tunnel_id,
+        version: get_version(),
+    };
+    tunnel_stream.write_all(&hello_packet.to_buf()).await?;
     Ok(tunnel_stream)
 }
 
 async fn spawn_tunnel(
     opener: Arc<ConnectionOpener>,
-    hello_packet: [u8; HelloPacket::buf_size()],
     settings: TunnelSettings,
     ssl: bool,
     request_time: Instant,
+    tunnel_id: u128,
 ) -> Result<()> {
     let mut tunnel_stream =
-        establish_connection(opener, hello_packet, &settings, request_time).await?;
+        establish_connection(opener, settings.token, tunnel_id, &settings, request_time).await?;
 
     if settings.serve_files {
         _ = super::serve::serve_files(&mut tunnel_stream, settings.files_index, &settings.consts)
@@ -359,16 +396,16 @@ async fn spawn_tunnel(
 
 async fn spawn_ssh_tunnel(
     opener: Arc<ConnectionOpener>,
-    hello_packet: [u8; HelloPacket::buf_size()],
     settings: TunnelSettings,
     request_time: Instant,
+    tunnel_id: u128,
 ) -> Result<()> {
     let Some(ref ssh_cmd) = settings.ssh_cmd else {
         return Err(anyhow!("Ssh tunnel not enabled by client!"));
     };
 
     let mut tunnel_stream =
-        establish_connection(opener, hello_packet, &settings, request_time).await?;
+        establish_connection(opener, settings.token, tunnel_id, &settings, request_time).await?;
 
     let mut header_buf = [0; SshPacketHeader::HEADER_LENGTH];
     let mut buf = [0u8; 4096];

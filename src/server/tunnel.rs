@@ -126,7 +126,13 @@ async fn handle_quic_connection(conn: quinn::Incoming, state: SharedProxyState) 
             Ok(s) => s,
         };
 
-        let fut = connector_handler(ConnectorStream::Quic(stream), state.clone());
+        let stream_id_bytes = u64::from(stream.0.id()).to_le_bytes();
+        let mut session_nonce = [0u8; 32];
+        connection
+            .export_keying_material(&mut session_nonce, b"fkm-proxy-auth", &stream_id_bytes)
+            .map_err(|_| anyhow::anyhow!("Failed to export QUIC session keying material"))?;
+
+        let fut = connector_handler(ConnectorStream::Quic(stream), state.clone(), session_nonce);
         tokio::spawn(async move {
             if let Err(e) = fut.await {
                 tracing::error!("[QUIC] Connector handler from {remote_addr} failed: {e}");
@@ -140,17 +146,27 @@ async fn connector_handler_tcp(
     state: SharedProxyState,
     acceptor: Arc<TlsAcceptor>,
 ) -> Result<()> {
-    let stream = ConnectorStream::TcpTlsServer(Box::new(acceptor.accept(stream).await?));
-    connector_handler(stream, state).await
+    let tls_stream = acceptor.accept(stream).await?;
+    let session_nonce: [u8; 32] =
+        tls_stream
+            .get_ref()
+            .1
+            .export_keying_material([0u8; 32], b"fkm-proxy-auth", None)?;
+    let stream = ConnectorStream::TcpTlsServer(Box::new(tls_stream));
+    connector_handler(stream, state, session_nonce).await
 }
 
-async fn connector_handler(mut stream: ConnectorStream, state: SharedProxyState) -> Result<()> {
+async fn connector_handler(
+    mut stream: ConnectorStream,
+    state: SharedProxyState,
+    session_nonce: [u8; 32],
+) -> Result<()> {
     let mut connection_buff = [0u8; HelloPacket::buf_size()];
     stream.read_exact(&mut connection_buff).await?;
 
     let hello_packet = ::fkm_proxy::utils::HelloPacket::from_buf(&connection_buff);
-    let Ok(domain) = state
-        .get_domain_by_token(hello_packet.token)
+    let Ok((domain, token)) = state
+        .find_token_by_hmac(&hello_packet.token_hmac, &session_nonce)
         .await
         .ok_or_else(|| fkm_proxy::utils::HelloPacketError::TokenMismatch)
     else {
@@ -229,7 +245,7 @@ async fn connector_handler(mut stream: ConnectorStream, state: SharedProxyState)
         let (tx, rx) = kanal::unbounded_async::<TunnelRequest>();
         state
             .insert_tunnel_connector(
-                hello_packet.token,
+                token,
                 tx,
                 hello_packet.own_ssl,
                 hello_packet.redirect_ssl,
@@ -243,7 +259,7 @@ async fn connector_handler(mut stream: ConnectorStream, state: SharedProxyState)
         }
 
         if matches!(res, Ok(true)) {
-            state.remove_tunnel(hello_packet.token).await;
+            state.remove_tunnel(token).await;
         }
         stream.shutdown().await;
     } else if hello_packet.hp_type == HelloPacketType::Tunnel {
@@ -552,7 +568,10 @@ where
 
         match res {
             Ok(token) => {
-                let body = format!("{{\"url\":\"{url}\",\"token\":\"{token}\"}}");
+                let body = serde_json::to_string(&serde_json::json!({
+                    "url": url,
+                    "token": token.to_string()
+                }))?;
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
                     body.len(),

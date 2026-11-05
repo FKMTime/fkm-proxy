@@ -60,3 +60,10 @@ jobs:
           labels: ${{ steps.meta2.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  alert:
+    name: Alert on failure
+    needs: push
+    if: failure() && github.event_name != 'pull_request'
+    uses: FKMTime/.github/.github/workflows/discord-alert.yml@main
+    secrets: inherit
